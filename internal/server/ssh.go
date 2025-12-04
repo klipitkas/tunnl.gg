@@ -37,20 +37,25 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		tcpConn.SetNoDelay(true)
 	}
 
-	if err := s.CheckAndReserveConnection(clientIP); err != nil {
-		log.Printf("Connection rejected from %s: %v", clientIP, err)
-		conn.Close()
-		return
-	}
-	// Connection slot reserved - must decrement on exit
-	defer s.DecrementIPConnection(clientIP)
-
+	// Do SSH handshake first so we can send error messages to the client
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.sshConfig)
 	if err != nil {
 		log.Printf("SSH handshake failed: %v", err)
 		return
 	}
 	defer sshConn.Close()
+
+	// Check rate limits and reservations after handshake
+	if err := s.CheckAndReserveConnection(clientIP); err != nil {
+		log.Printf("Connection rejected from %s: %v", clientIP, err)
+		// Discard global requests to avoid goroutine leak
+		go ssh.DiscardRequests(reqs)
+		// Try to send error message to client via session channel
+		s.sendErrorAndClose(sshConn, chans, err.Error())
+		return
+	}
+	// Connection slot reserved - must decrement on exit
+	defer s.DecrementIPConnection(clientIP)
 
 	// Track SSH connection for forced closure on IP block
 	s.RegisterSSHConn(clientIP, sshConn)
@@ -241,6 +246,44 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	}
 
 	log.Printf("SSH connection closed for subdomain: %s", sub)
+}
+
+// sendErrorAndClose sends an error message to the client and closes the connection
+// This is used when the connection is rejected after SSH handshake (e.g., IP blocked)
+func (s *Server) sendErrorAndClose(sshConn *ssh.ServerConn, chans <-chan ssh.NewChannel, errMsg string) {
+	// Wait for session channel with short timeout
+	select {
+	case newChannel, ok := <-chans:
+		if !ok {
+			return
+		}
+		if newChannel.ChannelType() != "session" {
+			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+			return
+		}
+		channel, requests, err := newChannel.Accept()
+		if err != nil {
+			return
+		}
+		// Handle pty-req and shell requests so the message displays properly
+		go func() {
+			for req := range requests {
+				if req.Type == "pty-req" || req.Type == "shell" {
+					if req.WantReply {
+						req.Reply(true, nil)
+					}
+				} else if req.WantReply {
+					req.Reply(false, nil)
+				}
+			}
+		}()
+		// Send error message
+		fmt.Fprintf(channel, "\r\n  ERROR: %s\r\n\r\n", errMsg)
+		channel.Close()
+	case <-time.After(3 * time.Second):
+		// Client didn't send session channel in time
+		return
+	}
 }
 
 func (s *Server) forwardToSSH(sshConn *ssh.ServerConn, tcpConn net.Conn, tun *tunnel.Tunnel) {
