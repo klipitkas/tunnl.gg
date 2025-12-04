@@ -222,19 +222,23 @@ func (s *Server) UnregisterSSHConn(clientIP string, conn *ssh.ServerConn) {
 // Closing SSH connections triggers cleanup which removes tunnels via defers
 // Returns the number of connections closed
 func (s *Server) CloseAllForIP(ip string) int {
+	// Collect connections while holding the lock
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Close SSH connections - this triggers cleanup via defer in HandleSSHConnection
-	// which will remove tunnels, decrement ipConnections, etc.
 	sshConns := s.sshConns[ip]
-	for _, conn := range sshConns {
+	// Make a copy of the slice since we'll modify the map after releasing lock
+	connsCopy := make([]*ssh.ServerConn, len(sshConns))
+	copy(connsCopy, sshConns)
+	// Remove from map now to prevent double-close attempts
+	delete(s.sshConns, ip)
+	s.mu.Unlock()
+
+	// Close connections outside the lock to avoid deadlock
+	// The cleanup handlers (UnregisterSSHConn) will be no-ops since we already removed from map
+	for _, conn := range connsCopy {
 		conn.Close()
 	}
-	connCount := len(sshConns)
-	delete(s.sshConns, ip)
 
-	return connCount
+	return len(connsCopy)
 }
 
 // Stop gracefully stops the server's background goroutines

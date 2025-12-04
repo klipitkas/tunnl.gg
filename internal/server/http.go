@@ -28,10 +28,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, config.MaxRequestBodySize)
 
-	host := r.Host
-	if idx := strings.LastIndex(host, ":"); idx != -1 {
-		host = host[:idx]
-	}
+	host := stripPort(r.Host)
 
 	if !strings.HasSuffix(host, "."+config.Domain) {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
@@ -133,8 +130,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
+		// After Hijack() is called (even on failure), ResponseWriter may be invalid
+		// Just log the error and return - the connection will be closed
 		log.Printf("WebSocket hijack error for %s: %v", sub, err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	defer clientConn.Close()
@@ -197,6 +195,14 @@ func isWebSocketRequest(r *http.Request) bool {
 		strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
 }
 
+// stripPort removes the port from a host string (e.g., "example.com:443" -> "example.com")
+func stripPort(host string) string {
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		return host[:idx]
+	}
+	return host
+}
+
 // limitedReadCloser wraps an io.ReadCloser and limits the number of bytes read
 type limitedReadCloser struct {
 	rc      io.ReadCloser
@@ -224,10 +230,7 @@ func (l *limitedReadCloser) Close() error {
 // HTTPRedirectHandler returns an http.Handler that redirects HTTP to HTTPS
 func HTTPRedirectHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := r.Host
-		if idx := strings.LastIndex(host, ":"); idx != -1 {
-			host = host[:idx]
-		}
+		host := stripPort(r.Host)
 		if !strings.HasSuffix(host, "."+config.Domain) && host != config.Domain {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
 			return

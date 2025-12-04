@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,7 +74,14 @@ func (at *AbuseTracker) callOnBlock(ip string) {
 
 	if cb != nil {
 		// Call callback without holding lock to avoid deadlock
-		go cb(ip)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("Panic in onBlock callback for IP %s: %v", ip, r)
+				}
+			}()
+			cb(ip)
+		}()
 	}
 }
 

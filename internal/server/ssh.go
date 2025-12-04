@@ -70,6 +70,9 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		log.Printf("Failed to create tunnel listener: %v", err)
 		return
 	}
+	// Ensure listener is closed on early return (before tunnel registration)
+	// This is safe even after tunnel registration since net.Listener.Close() is idempotent
+	defer tunnelListener.Close()
 
 	var bindAddr string
 	var bindPort uint32

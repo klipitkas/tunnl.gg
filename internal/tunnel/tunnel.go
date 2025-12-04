@@ -103,6 +103,7 @@ func (t *Tunnel) RecordRateLimitHit() bool {
 func (t *Tunnel) CloseSSH() {
 	t.mu.Lock()
 	conn := t.sshConn
+	t.sshConn = nil // Prevent redundant close calls
 	t.mu.Unlock()
 
 	if conn != nil {
