@@ -77,19 +77,6 @@ func (at *AbuseTracker) callOnBlock(ip string) {
 	}
 }
 
-// IsBlocked checks if an IP is currently blocked
-func (at *AbuseTracker) IsBlocked(ip string) bool {
-	at.mu.RLock()
-	defer at.mu.RUnlock()
-
-	expiry, blocked := at.blockedIPs[ip]
-	if !blocked {
-		return false
-	}
-
-	return time.Now().Before(expiry)
-}
-
 // GetBlockExpiry returns the expiry time for a blocked IP, or zero time if not blocked
 func (at *AbuseTracker) GetBlockExpiry(ip string) time.Time {
 	at.mu.RLock()
@@ -160,29 +147,6 @@ func (at *AbuseTracker) CheckConnectionRate(ip string) bool {
 	return true
 }
 
-// RecordHTTPRateLimitViolation records an HTTP rate limit violation for an IP
-// Auto-blocks IP after repeated violations
-func (at *AbuseTracker) RecordHTTPRateLimitViolation(ip string) {
-	at.mu.Lock()
-
-	at.violationCounts[ip]++
-
-	// Auto-block after too many violations
-	blocked := false
-	if at.violationCounts[ip] >= config.RateLimitViolationsMax {
-		at.blockedIPs[ip] = time.Now().Add(config.BlockDuration)
-		delete(at.violationCounts, ip)
-		blocked = true
-	}
-
-	at.mu.Unlock()
-
-	at.totalRateLimited.Add(1)
-	if blocked {
-		at.totalBlocked.Add(1)
-		at.callOnBlock(ip)
-	}
-}
 
 // GetStats returns abuse tracking statistics
 func (at *AbuseTracker) GetStats() (blockedIPs int, totalBlocked uint64, totalRateLimited uint64) {

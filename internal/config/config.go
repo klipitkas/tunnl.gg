@@ -21,7 +21,7 @@ const (
 
 	// IP blocking
 	BlockDuration          = 1 * time.Hour // how long to block abusive IPs
-	RateLimitViolationsMax = 5             // violations before auto-block
+	RateLimitViolationsMax = 10            // violations before auto-block
 
 	// Tunnel lifetime
 	MaxTunnelLifetime = 24 * time.Hour // max tunnel duration regardless of activity

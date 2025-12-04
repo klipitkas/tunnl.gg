@@ -173,14 +173,17 @@ Represents a single active tunnel.
 
 ```go
 type Tunnel struct {
-    Subdomain   string
-    Listener    net.Listener  // Internal listener (127.0.0.1:random)
-    CreatedAt   time.Time     // For max lifetime check
-    LastActive  time.Time     // For inactivity timeout
-    BindAddr    string        // Client's requested bind address
-    BindPort    uint32        // Client's requested bind port
-    mu          sync.Mutex
-    rateLimiter *RateLimiter  // Per-tunnel rate limiting
+    Subdomain     string
+    Listener      net.Listener  // Internal listener (127.0.0.1:random)
+    CreatedAt     time.Time     // For max lifetime check
+    LastActive    time.Time     // For inactivity timeout
+    BindAddr      string        // Client's requested bind address
+    BindPort      uint32        // Client's requested bind port
+    ClientIP      string        // SSH client IP (for blocking on abuse)
+    mu            sync.Mutex
+    rateLimiter   *RateLimiter  // Per-tunnel rate limiting
+    sshConn       SSHCloser     // Reference to SSH connection for forced closure
+    rateLimitHits int           // Count of rate limit violations
 }
 ```
 
@@ -249,7 +252,8 @@ type AbuseTracker struct {
 **Features:**
 
 - **Connection rate limiting**: Sliding window (1 minute) tracking new SSH connections per IP
-- **Auto-blocking**: IPs exceeding rate limits 5 times are blocked for 1 hour
+- **Per-tunnel rate limiting**: Tunnels exceeding HTTP rate limits are killed and their SSH client IP is blocked
+- **Auto-blocking**: IPs exceeding rate limits are blocked for 1 hour
 - **Block notification**: Users see block expiry time when attempting to connect
 - **Connection closure**: All SSH connections (and their tunnels) are forcibly closed when an IP is blocked
 - **Memory cleanup**: Background goroutine removes stale entries every 5 minutes
@@ -302,7 +306,8 @@ Browser                    Server                         Client
    - Global: Max 1000 total tunnels
 
 7. **Abuse Protection**:
-   - Auto-block after 5 rate limit violations (1-hour block)
+   - Tunnels exceeding HTTP rate limits 10 times are killed and SSH client IP is blocked (1-hour block)
+   - SSH connection rate limiting: 10 connections/minute per IP
    - All SSH connections forcibly closed when IP is blocked (tunnels cleaned up automatically)
    - Users notified of block expiry time
    - Memory-safe cleanup of tracking data

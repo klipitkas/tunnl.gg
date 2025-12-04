@@ -51,12 +51,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get client IP for abuse tracking
-	clientIP := getClientIP(r)
-
 	if !tun.AllowRequest() {
-		// Record violation for potential auto-block
-		s.abuseTracker.RecordHTTPRateLimitViolation(clientIP)
+		// Record violation and kill tunnel + block SSH client IP if too many violations
+		if tun.RecordRateLimitHit() {
+			log.Printf("Tunnel %s killed due to rate limit abuse, blocking SSH client %s", sub, tun.ClientIP)
+			s.BlockIP(tun.ClientIP)
+			tun.CloseSSH()
+		}
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
@@ -194,18 +195,6 @@ func redirectToWarningPage(w http.ResponseWriter, r *http.Request, sub string) {
 func isWebSocketRequest(r *http.Request) bool {
 	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket") &&
 		strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
-}
-
-func getClientIP(r *http.Request) string {
-	// SECURITY: Do NOT trust X-Forwarded-For header as it can be spoofed.
-	// This service runs directly on the internet without a trusted reverse proxy.
-	// If deploying behind a trusted proxy (nginx, cloudflare), this should be
-	// updated to only trust the header from known proxy IPs.
-	ip := r.RemoteAddr
-	if idx := strings.LastIndex(ip, ":"); idx != -1 {
-		ip = ip[:idx]
-	}
-	return ip
 }
 
 // limitedReadCloser wraps an io.ReadCloser and limits the number of bytes read

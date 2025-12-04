@@ -153,11 +153,6 @@ func (s *Server) BlockIP(ip string) {
 	s.abuseTracker.BlockIP(ip)
 }
 
-// IsIPBlocked checks if an IP is blocked
-func (s *Server) IsIPBlocked(ip string) bool {
-	return s.abuseTracker.IsBlocked(ip)
-}
-
 // DecrementIPConnection decrements the connection count for an IP
 func (s *Server) DecrementIPConnection(clientIP string) {
 	s.mu.Lock()
@@ -169,11 +164,11 @@ func (s *Server) DecrementIPConnection(clientIP string) {
 }
 
 // RegisterTunnel registers a new tunnel
-func (s *Server) RegisterTunnel(sub string, listener net.Listener, bindAddr string, bindPort uint32) *tunnel.Tunnel {
+func (s *Server) RegisterTunnel(sub string, listener net.Listener, bindAddr string, bindPort uint32, clientIP string) *tunnel.Tunnel {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	t := tunnel.New(sub, listener, bindAddr, bindPort)
+	t := tunnel.New(sub, listener, bindAddr, bindPort, clientIP)
 	s.tunnels[sub] = t
 	return t
 }

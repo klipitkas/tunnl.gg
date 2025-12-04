@@ -32,7 +32,7 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 | Inactivity timeout | 30 min | Tunnel closes after inactivity |
 | Max tunnel lifetime | 24 hours | Absolute tunnel lifetime limit |
 | Block duration | 1 hour | Temporary IP block after abuse |
-| Violations before block | 5 | Rate limit violations before auto-block |
+| Violations before block | 10 | Rate limit violations before tunnel kill + IP block |
 
 ## Project Structure
 
