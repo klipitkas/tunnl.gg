@@ -1,0 +1,185 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
+	"time"
+
+	"tunnl.gg/internal/config"
+	"tunnl.gg/internal/subdomain"
+	"tunnl.gg/internal/tunnel"
+)
+
+// ServeHTTP implements http.Handler for HTTPS requests
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+
+	host := r.Host
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+
+	if !strings.HasSuffix(host, "."+config.Domain) {
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	sub := strings.TrimSuffix(host, "."+config.Domain)
+
+	if !subdomain.IsValid(sub) {
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	tun := s.GetTunnel(sub)
+	if tun == nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	if !tun.AllowRequest() {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		return
+	}
+
+	tun.Touch()
+	s.IncrementRequests()
+
+	// Show interstitial warning for browser requests
+	if isBrowserRequest(r) &&
+		r.Header.Get("tunnl-skip-browser-warning") == "" &&
+		!hasWarningCookie(r, sub) {
+		redirectToWarningPage(w, r, sub)
+		return
+	}
+
+	if isWebSocketRequest(r) {
+		s.handleWebSocket(w, r, tun, sub)
+		return
+	}
+
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = "http"
+			req.URL.Host = tun.Listener.Addr().String()
+			req.Host = r.Host
+		},
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return net.DialTimeout("tcp", tun.Listener.Addr().String(), 10*time.Second)
+			},
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Printf("Proxy error for %s: %v", sub, err)
+			http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		},
+	}
+
+	proxy.ServeHTTP(w, r)
+}
+
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tunnel.Tunnel, sub string) {
+	backendConn, err := net.DialTimeout("tcp", tun.Listener.Addr().String(), 10*time.Second)
+	if err != nil {
+		log.Printf("WebSocket backend dial error for %s: %v", sub, err)
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		return
+	}
+	defer backendConn.Close()
+
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		log.Printf("WebSocket hijack not supported for %s", sub)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	clientConn, _, err := hijacker.Hijack()
+	if err != nil {
+		log.Printf("WebSocket hijack error for %s: %v", sub, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	defer clientConn.Close()
+
+	if err := r.Write(backendConn); err != nil {
+		log.Printf("WebSocket request write error for %s: %v", sub, err)
+		return
+	}
+
+	done := make(chan struct{}, 2)
+	go func() {
+		io.Copy(backendConn, clientConn)
+		done <- struct{}{}
+	}()
+	go func() {
+		io.Copy(clientConn, backendConn)
+		done <- struct{}{}
+	}()
+	<-done
+}
+
+func setSecurityHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-XSS-Protection", "1; mode=block")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+}
+
+func isBrowserRequest(r *http.Request) bool {
+	ua := strings.ToLower(r.Header.Get("User-Agent"))
+	browserKeywords := []string{"mozilla", "chrome", "safari", "firefox", "edge", "opera"}
+	for _, kw := range browserKeywords {
+		if strings.Contains(ua, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasWarningCookie(r *http.Request, sub string) bool {
+	cookie, err := r.Cookie(config.WarningCookieName + "_" + sub)
+	if err != nil {
+		return false
+	}
+	return cookie.Value == "1"
+}
+
+func redirectToWarningPage(w http.ResponseWriter, r *http.Request, sub string) {
+	originalURL := "https://" + r.Host + r.URL.RequestURI()
+	fullSubdomain := sub + "." + config.Domain
+	warningURL := fmt.Sprintf("https://%s/#/warning?redirect=%s&subdomain=%s",
+		config.Domain,
+		url.QueryEscape(originalURL),
+		url.QueryEscape(fullSubdomain))
+	http.Redirect(w, r, warningURL, http.StatusTemporaryRedirect)
+}
+
+func isWebSocketRequest(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket") &&
+		strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
+}
+
+// HTTPRedirectHandler returns an http.Handler that redirects HTTP to HTTPS
+func HTTPRedirectHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if idx := strings.LastIndex(host, ":"); idx != -1 {
+			host = host[:idx]
+		}
+		if !strings.HasSuffix(host, "."+config.Domain) && host != config.Domain {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+		target := "https://" + r.Host + r.URL.RequestURI()
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+	})
+}

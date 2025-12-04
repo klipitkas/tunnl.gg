@@ -1,0 +1,57 @@
+services:
+  # Production instance (default ports)
+  tunnl:
+    build: .
+    container_name: tunnl
+    restart: unless-stopped
+    ports:
+      - "22:22"      # SSH tunnel connections
+      - "80:80"      # HTTP (ACME + redirect)
+      - "443:443"    # HTTPS tunnel traffic
+    volumes:
+      - ./data/host_key:/host_key
+      - ./data/certs:/certs:ro
+    environment:
+      - SSH_ADDR=:22
+      - HTTP_ADDR=:80
+      - HTTPS_ADDR=:443
+      - HOST_KEY_PATH=/host_key
+      - TLS_CERT=/certs/fullchain.pem
+      - TLS_KEY=/certs/privkey.pem
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+
+  # Development/staging instance (alternate ports)
+  # Usage: docker compose up tunnl-dev
+  tunnl-dev:
+    build: .
+    container_name: tunnl-dev
+    restart: unless-stopped
+    profiles:
+      - dev
+    ports:
+      - "2223:22"     # SSH tunnel connections (connect via: ssh -p 2223 ...)
+      - "8080:80"     # HTTP
+      - "8443:443"    # HTTPS
+    volumes:
+      - ./data-dev/host_key:/host_key
+      - ./data-dev/certs:/certs:ro
+    environment:
+      - SSH_ADDR=:22
+      - HTTP_ADDR=:80
+      - HTTPS_ADDR=:443
+      - HOST_KEY_PATH=/host_key
+      - TLS_CERT=/certs/fullchain.pem
+      - TLS_KEY=/certs/privkey.pem
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true

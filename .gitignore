@@ -1,0 +1,4 @@
+!.gitignore
+bin/
+host_key
+*.exe

@@ -1,0 +1,31 @@
+# Build artifacts
+bin/
+*.exe
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Documentation (not needed in build)
+*.md
+LICENSE
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Runtime files
+host_key
+data/
+
+# OS files
+.DS_Store
+Thumbs.db
