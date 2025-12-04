@@ -21,6 +21,13 @@ import (
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
 
+	// Enforce request body size limit
+	if r.ContentLength > config.MaxRequestBodySize {
+		http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, config.MaxRequestBodySize)
+
 	host := r.Host
 	if idx := strings.LastIndex(host, ":"); idx != -1 {
 		host = host[:idx]
@@ -44,7 +51,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get client IP for abuse tracking
+	clientIP := getClientIP(r)
+
 	if !tun.AllowRequest() {
+		// Record violation for potential auto-block
+		s.abuseTracker.RecordHTTPRateLimitViolation(clientIP)
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
@@ -77,8 +89,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return net.DialTimeout("tcp", tun.Listener.Addr().String(), 10*time.Second)
 			},
 		},
+		ModifyResponse: func(resp *http.Response) error {
+			// Enforce response body size limit
+			if resp.ContentLength > config.MaxResponseBodySize {
+				return fmt.Errorf("response too large: %d bytes (max %d)", resp.ContentLength, config.MaxResponseBodySize)
+			}
+			// Wrap body with size limiter for chunked/unknown-length responses
+			resp.Body = &limitedReadCloser{
+				rc:    resp.Body,
+				limit: config.MaxResponseBodySize,
+			}
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("Proxy error for %s: %v", sub, err)
+			if strings.Contains(err.Error(), "response too large") {
+				http.Error(w, "Response Too Large", http.StatusBadGateway)
+				return
+			}
 			http.Error(w, "Bad Gateway", http.StatusBadGateway)
 		},
 	}
@@ -166,6 +194,42 @@ func redirectToWarningPage(w http.ResponseWriter, r *http.Request, sub string) {
 func isWebSocketRequest(r *http.Request) bool {
 	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket") &&
 		strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
+}
+
+func getClientIP(r *http.Request) string {
+	// SECURITY: Do NOT trust X-Forwarded-For header as it can be spoofed.
+	// This service runs directly on the internet without a trusted reverse proxy.
+	// If deploying behind a trusted proxy (nginx, cloudflare), this should be
+	// updated to only trust the header from known proxy IPs.
+	ip := r.RemoteAddr
+	if idx := strings.LastIndex(ip, ":"); idx != -1 {
+		ip = ip[:idx]
+	}
+	return ip
+}
+
+// limitedReadCloser wraps an io.ReadCloser and limits the number of bytes read
+type limitedReadCloser struct {
+	rc      io.ReadCloser
+	limit   int64
+	read    int64
+}
+
+func (l *limitedReadCloser) Read(p []byte) (n int, err error) {
+	if l.read >= l.limit {
+		return 0, fmt.Errorf("response body too large (exceeded %d bytes)", l.limit)
+	}
+	remaining := l.limit - l.read
+	if int64(len(p)) > remaining {
+		p = p[:remaining]
+	}
+	n, err = l.rc.Read(p)
+	l.read += int64(n)
+	return n, err
+}
+
+func (l *limitedReadCloser) Close() error {
+	return l.rc.Close()
 }
 
 // HTTPRedirectHandler returns an http.Handler that redirects HTTP to HTTPS

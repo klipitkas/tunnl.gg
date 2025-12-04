@@ -4,13 +4,30 @@ import "time"
 
 const (
 	Domain            = "tunnl.gg"
-	InactivityTimeout = 1 * time.Hour
-	MaxTunnelsPerIP   = 5
+	InactivityTimeout = 30 * time.Minute // Reduced from 1 hour
+	MaxTunnelsPerIP   = 3                // Reduced from 5
 	MaxTotalTunnels   = 1000
 
 	// HTTP rate limiting per tunnel
 	RequestsPerSecond = 10 // requests per second per tunnel
 	BurstSize         = 20 // max burst size
+
+	// Request size limits
+	MaxRequestBodySize = 128 * 1024 * 1024 // 128MB
+
+	// Connection rate limiting (new connections per IP)
+	MaxConnectionsPerMinute = 10              // max new connections per IP per minute
+	ConnectionRateWindow    = 1 * time.Minute // sliding window for connection rate
+
+	// IP blocking
+	BlockDuration          = 1 * time.Hour // how long to block abusive IPs
+	RateLimitViolationsMax = 5             // violations before auto-block
+
+	// Tunnel lifetime
+	MaxTunnelLifetime = 24 * time.Hour // max tunnel duration regardless of activity
+
+	// Response size limits
+	MaxResponseBodySize = 128 * 1024 * 1024 // 128MB
 
 	// Interstitial warning cookie
 	WarningCookieName   = "tunnl_warned"

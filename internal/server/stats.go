@@ -14,6 +14,11 @@ type Stats struct {
 	TotalConnections uint64   `json:"total_connections"`
 	TotalRequests    uint64   `json:"total_requests"`
 	Subdomains       []string `json:"subdomains,omitempty"`
+
+	// Abuse protection stats
+	BlockedIPs       int    `json:"blocked_ips"`
+	TotalBlocked     uint64 `json:"total_blocked"`
+	TotalRateLimited uint64 `json:"total_rate_limited"`
 }
 
 // IncrementConnections increments the total connection counter
@@ -31,11 +36,16 @@ func (s *Server) GetStats(includeSubdomains bool) Stats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	blockedIPs, totalBlocked, totalRateLimited := s.abuseTracker.GetStats()
+
 	stats := Stats{
 		ActiveTunnels:    len(s.tunnels),
 		UniqueIPs:        len(s.ipConnections),
 		TotalConnections: atomic.LoadUint64(&s.totalConnections),
 		TotalRequests:    atomic.LoadUint64(&s.totalRequests),
+		BlockedIPs:       blockedIPs,
+		TotalBlocked:     totalBlocked,
+		TotalRateLimited: totalRateLimited,
 	}
 
 	if includeSubdomains {

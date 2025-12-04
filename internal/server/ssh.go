@@ -30,16 +30,20 @@ type forwardedTCPPayload struct {
 func (s *Server) HandleSSHConnection(conn net.Conn) {
 	clientIP := "unknown"
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		clientIP = tcpConn.RemoteAddr().(*net.TCPAddr).IP.String()
+		if tcpAddr, ok := tcpConn.RemoteAddr().(*net.TCPAddr); ok {
+			clientIP = tcpAddr.IP.String()
+		}
 		// Set TCP_NODELAY to prevent SSH library from logging errors
 		tcpConn.SetNoDelay(true)
 	}
 
-	if err := s.CheckRateLimits(clientIP); err != nil {
+	if err := s.CheckAndReserveConnection(clientIP); err != nil {
 		log.Printf("Connection rejected from %s: %v", clientIP, err)
 		conn.Close()
 		return
 	}
+	// Connection slot reserved - must decrement on exit
+	defer s.DecrementIPConnection(clientIP)
 
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.sshConfig)
 	if err != nil {
@@ -48,9 +52,11 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	}
 	defer sshConn.Close()
 
-	s.IncrementIPConnection(clientIP)
+	// Track SSH connection for forced closure on IP block
+	s.RegisterSSHConn(clientIP, sshConn)
+	defer s.UnregisterSSHConn(clientIP, sshConn)
+
 	s.IncrementConnections()
-	defer s.DecrementIPConnection(clientIP)
 
 	sub, err := s.GenerateUniqueSubdomain()
 	if err != nil {
@@ -75,23 +81,31 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	// Handle global requests (port forwarding)
 	go func() {
-		for req := range reqs {
-			switch req.Type {
-			case "tcpip-forward":
-				var fwdReq tcpipForwardRequest
-				if err := ssh.Unmarshal(req.Payload, &fwdReq); err != nil {
-					req.Reply(false, nil)
-					continue
+		for {
+			select {
+			case req, ok := <-reqs:
+				if !ok {
+					return
 				}
-				bindAddr = fwdReq.BindAddr
-				bindPort = fwdReq.BindPort
-				tun = s.RegisterTunnel(sub, tunnelListener, bindAddr, bindPort)
-				close(tunnelRegistered)
-				req.Reply(true, nil)
-			case "cancel-tcpip-forward":
-				req.Reply(true, nil)
-			default:
-				req.Reply(false, nil)
+				switch req.Type {
+				case "tcpip-forward":
+					var fwdReq tcpipForwardRequest
+					if err := ssh.Unmarshal(req.Payload, &fwdReq); err != nil {
+						req.Reply(false, nil)
+						continue
+					}
+					bindAddr = fwdReq.BindAddr
+					bindPort = fwdReq.BindPort
+					tun = s.RegisterTunnel(sub, tunnelListener, bindAddr, bindPort)
+					close(tunnelRegistered)
+					req.Reply(true, nil)
+				case "cancel-tcpip-forward":
+					req.Reply(true, nil)
+				default:
+					req.Reply(false, nil)
+				}
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
@@ -106,7 +120,20 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	defer s.RemoveTunnel(sub)
 
 	url := fmt.Sprintf("https://%s.%s", sub, config.Domain)
-	urlMessage := fmt.Sprintf("\r\n  Tunnel established!\r\n  URL: %s\r\n\r\n  Press Ctrl+C to close.\r\n\r\n", url)
+	expiresAt := tun.CreatedAt.Add(config.MaxTunnelLifetime).Format("Jan 02, 2006 at 15:04 MST")
+
+	expiresLine := fmt.Sprintf("%s (or %dm idle)", expiresAt, int(config.InactivityTimeout.Minutes()))
+
+	urlMessage := fmt.Sprintf("\r\n"+
+		"  +-------------------------------------------------------------+\r\n"+
+		"  |                         tunnl.gg                            |\r\n"+
+		"  +-------------------------------------------------------------+\r\n"+
+		"  |  URL: %-53s |\r\n"+
+		"  |  Expires: %-50s |\r\n"+
+		"  +-------------------------------------------------------------+\r\n"+
+		"  |  Press Ctrl+C to close the tunnel                           |\r\n"+
+		"  +-------------------------------------------------------------+\r\n\r\n",
+		url, expiresLine)
 
 	// Inactivity checker
 	go func() {
@@ -129,12 +156,20 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	// Wait for a session channel with timeout
 	sessionReceived := make(chan ssh.NewChannel, 1)
 	go func() {
-		for newChannel := range chans {
-			if newChannel.ChannelType() == "session" {
-				sessionReceived <- newChannel
+		for {
+			select {
+			case newChannel, ok := <-chans:
+				if !ok {
+					return
+				}
+				if newChannel.ChannelType() == "session" {
+					sessionReceived <- newChannel
+					return
+				}
+				newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+			case <-ctx.Done():
 				return
 			}
-			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
 		}
 	}()
 

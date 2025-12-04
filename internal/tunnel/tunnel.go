@@ -12,6 +12,7 @@ import (
 type Tunnel struct {
 	Subdomain   string
 	Listener    net.Listener
+	CreatedAt   time.Time
 	LastActive  time.Time
 	BindAddr    string
 	BindPort    uint32
@@ -21,10 +22,12 @@ type Tunnel struct {
 
 // New creates a new tunnel with the given parameters
 func New(subdomain string, listener net.Listener, bindAddr string, bindPort uint32) *Tunnel {
+	now := time.Now()
 	return &Tunnel{
 		Subdomain:   subdomain,
 		Listener:    listener,
-		LastActive:  time.Now(),
+		CreatedAt:   now,
+		LastActive:  now,
 		BindAddr:    bindAddr,
 		BindPort:    bindPort,
 		rateLimiter: NewRateLimiter(config.RequestsPerSecond, config.BurstSize),
@@ -38,11 +41,33 @@ func (t *Tunnel) Touch() {
 	t.mu.Unlock()
 }
 
-// IsExpired returns true if the tunnel has been inactive for too long
+// IsExpired returns true if the tunnel has been inactive for too long or exceeded max lifetime
 func (t *Tunnel) IsExpired() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return time.Since(t.LastActive) > config.InactivityTimeout
+	return time.Since(t.LastActive) > config.InactivityTimeout ||
+		time.Since(t.CreatedAt) > config.MaxTunnelLifetime
+}
+
+// IsMaxLifetimeExceeded returns true if the tunnel has exceeded max lifetime
+func (t *Tunnel) IsMaxLifetimeExceeded() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return time.Since(t.CreatedAt) > config.MaxTunnelLifetime
+}
+
+// TimeRemaining returns the time remaining before the tunnel expires (either by inactivity or max lifetime)
+func (t *Tunnel) TimeRemaining() time.Duration {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	inactivityRemaining := config.InactivityTimeout - time.Since(t.LastActive)
+	lifetimeRemaining := config.MaxTunnelLifetime - time.Since(t.CreatedAt)
+
+	if inactivityRemaining < lifetimeRemaining {
+		return inactivityRemaining
+	}
+	return lifetimeRemaining
 }
 
 // AllowRequest checks if a request is allowed by the rate limiter

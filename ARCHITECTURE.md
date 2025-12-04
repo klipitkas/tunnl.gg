@@ -57,7 +57,8 @@ tunnl.gg/
     │   ├── server.go           # Server struct, tunnel registry, rate limits
     │   ├── ssh.go              # SSH connection handling, port forwarding
     │   ├── http.go             # HTTP/HTTPS handlers, reverse proxy, WebSocket
-    │   └── stats.go            # Statistics tracking and endpoint
+    │   ├── stats.go            # Statistics tracking and endpoint
+    │   └── abuse.go            # Abuse tracking, IP blocking, connection rate limiting
     ├── subdomain/
     │   └── subdomain.go        # Memorable subdomain generation and validation
     └── tunnel/
@@ -136,6 +137,9 @@ Listens on `127.0.0.1:9090` (localhost only) and exposes metrics.
   "unique_ips": 2,
   "total_connections": 15,
   "total_requests": 1247,
+  "blocked_ips": 1,
+  "total_blocked": 5,
+  "total_rate_limited": 23,
   "subdomains": ["happy-tiger-a1b2", "calm-eagle-c3d4"]
 }
 ```
@@ -149,13 +153,17 @@ Thread-safe map storing active tunnels.
 ```go
 type Server struct {
     tunnels       map[string]*tunnel.Tunnel
-    ipConnections map[string]int  // Rate limit per IP
+    ipConnections map[string]int             // Concurrent tunnels per IP
+    sshConns      map[string][]*ssh.ServerConn // SSH connections per IP (for forced closure)
     mu            sync.RWMutex
     sshConfig     *ssh.ServerConfig
 
     // Stats (atomic counters)
     totalConnections uint64
     totalRequests    uint64
+
+    // Abuse protection
+    abuseTracker *AbuseTracker
 }
 ```
 
@@ -167,6 +175,7 @@ Represents a single active tunnel.
 type Tunnel struct {
     Subdomain   string
     Listener    net.Listener  // Internal listener (127.0.0.1:random)
+    CreatedAt   time.Time     // For max lifetime check
     LastActive  time.Time     // For inactivity timeout
     BindAddr    string        // Client's requested bind address
     BindPort    uint32        // Client's requested bind port
@@ -204,8 +213,47 @@ type RateLimiter struct {
 
 ### 9. Inactivity Monitor
 
-Per-tunnel goroutine that checks every minute if `LastActive` exceeds 1 hour.
+Per-tunnel goroutine that checks every minute if `LastActive` exceeds 30 minutes or if `CreatedAt` exceeds 24 hours (max lifetime).
 If expired, closes the SSH connection, which triggers cleanup.
+
+### 10. Abuse Tracker (`internal/server/abuse.go`)
+
+Tracks connection patterns and blocks abusive IPs.
+
+```go
+type AbuseTracker struct {
+    mu sync.RWMutex
+
+    // Connection timestamps per IP for rate limiting
+    connectionTimes map[string][]time.Time
+
+    // Blocked IPs with expiration time
+    blockedIPs map[string]time.Time
+
+    // Rate limit violation counts per IP
+    violationCounts map[string]int
+
+    // Callback when IP is blocked (closes existing tunnels)
+    onBlock BlockCallback
+
+    // Stats (atomic for thread safety)
+    totalBlocked     atomic.Uint64
+    totalRateLimited atomic.Uint64
+
+    // Lifecycle management
+    stopCleanup chan struct{}
+    cleanupDone chan struct{}
+}
+```
+
+**Features:**
+
+- **Connection rate limiting**: Sliding window (1 minute) tracking new SSH connections per IP
+- **Auto-blocking**: IPs exceeding rate limits 5 times are blocked for 1 hour
+- **Block notification**: Users see block expiry time when attempting to connect
+- **Connection closure**: All SSH connections (and their tunnels) are forcibly closed when an IP is blocked
+- **Memory cleanup**: Background goroutine removes stale entries every 5 minutes
+- **Graceful shutdown**: `Stop()` method for clean server shutdown
 
 ## Data Flow
 
@@ -248,17 +296,32 @@ Browser                    Server                         Client
 5. **Host Validation**: Only requests to `*.tunnl.gg` are accepted.
 
 6. **Rate Limiting**:
-   - Per IP: Max 5 concurrent tunnels
+   - Per IP: Max 3 concurrent tunnels
    - Per tunnel: 10 requests/second, 20 burst
+   - Per IP: Max 10 new connections per minute
    - Global: Max 1000 total tunnels
 
-7. **Inactivity Timeout**: 1-hour limit prevents resource exhaustion.
+7. **Abuse Protection**:
+   - Auto-block after 5 rate limit violations (1-hour block)
+   - All SSH connections forcibly closed when IP is blocked (tunnels cleaned up automatically)
+   - Users notified of block expiry time
+   - Memory-safe cleanup of tracking data
 
-8. **Phishing Protection**: Browser requests show interstitial warning page (cookie-based, 1 day).
+8. **Request/Response Limits**:
+   - Max request body: 128 MB
+   - Max response body: 128 MB
 
-9. **Security Headers**: All responses include `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy`.
+9. **Tunnel Lifetime**:
+   - Inactivity timeout: 30 minutes
+   - Max lifetime: 24 hours (regardless of activity)
 
-10. **Stats Endpoint**: Only accessible from localhost (127.0.0.1, ::1).
+10. **IP Spoofing Prevention**: X-Forwarded-For header is not trusted (service runs directly on internet).
+
+11. **Phishing Protection**: Browser requests show interstitial warning page (cookie-based, 1 day).
+
+12. **Security Headers**: All responses include `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy`.
+
+13. **Stats Endpoint**: Only accessible from localhost (127.0.0.1, ::1).
 
 ## Configuration
 

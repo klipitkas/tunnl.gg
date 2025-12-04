@@ -13,12 +13,26 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 - Memorable subdomain per connection (e.g., `https://happy-tiger-a1b2.tunnl.gg`)
 - Automatic SSL via Let's Encrypt
 - WebSocket support
-- Rate limiting (10 req/s per tunnel, 5 tunnels per IP)
+- Comprehensive rate limiting and abuse protection
 - Phishing protection via interstitial warning page
 - Built-in stats/metrics endpoint
 - No authentication required
-- 1-hour inactivity timeout
 - Zero configuration for clients
+
+### Limits & Protection
+
+| Limit | Value | Description |
+|-------|-------|-------------|
+| Tunnels per IP | 3 | Max concurrent tunnels per IP address |
+| Total tunnels | 1000 | Server-wide tunnel limit |
+| Requests per tunnel | 10/s (burst 20) | Token bucket rate limiting |
+| Request body size | 128 MB | Max upload size |
+| Response body size | 128 MB | Max response size |
+| Connections per minute | 10 | New SSH connections per IP |
+| Inactivity timeout | 30 min | Tunnel closes after inactivity |
+| Max tunnel lifetime | 24 hours | Absolute tunnel lifetime limit |
+| Block duration | 1 hour | Temporary IP block after abuse |
+| Violations before block | 5 | Rate limit violations before auto-block |
 
 ## Project Structure
 
@@ -32,7 +46,8 @@ tunnl.gg/
 │   │   ├── server.go       # Server struct, tunnel registry
 │   │   ├── ssh.go          # SSH connection handling
 │   │   ├── http.go         # HTTP/HTTPS handlers
-│   │   └── stats.go        # Stats tracking and endpoint
+│   │   ├── stats.go        # Stats tracking and endpoint
+│   │   └── abuse.go        # Abuse tracking and IP blocking
 │   ├── subdomain/          # Subdomain generation/validation
 │   │   └── subdomain.go
 │   └── tunnel/             # Tunnel and rate limiter
@@ -232,6 +247,9 @@ Response:
   "unique_ips": 2,
   "total_connections": 15,
   "total_requests": 1247,
+  "blocked_ips": 1,
+  "total_blocked": 5,
+  "total_rate_limited": 23,
   "subdomains": ["happy-tiger-a1b2", "calm-eagle-c3d4", "swift-wolf-e5f6"]
 }
 ```

@@ -52,10 +52,19 @@ func main() {
 	}
 	log.Printf("SSH server listening on %s", cfg.SSHAddr)
 
+	sshShutdown := make(chan struct{})
+	sshDone := make(chan struct{})
 	go func() {
+		defer close(sshDone)
 		for {
 			conn, err := sshListener.Accept()
 			if err != nil {
+				// Check if shutdown was requested
+				select {
+				case <-sshShutdown:
+					return
+				default:
+				}
 				log.Printf("Failed to accept SSH connection: %v", err)
 				continue
 			}
@@ -121,8 +130,16 @@ func main() {
 	log.Println("Shutting down...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// Shutdown HTTP servers gracefully
 	httpServer.Shutdown(ctx)
 	httpsServer.Shutdown(ctx)
 	statsServer.Shutdown(ctx)
+
+	// Signal SSH goroutine to stop, then close listener
+	close(sshShutdown)
 	sshListener.Close()
+	<-sshDone // Wait for SSH accept loop to finish
+
+	srv.Stop()
 }
