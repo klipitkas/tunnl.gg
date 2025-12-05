@@ -142,14 +142,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 		return
 	}
 
-	done := make(chan struct{}, 2)
+	// Copy data bidirectionally. When one direction completes (or errors),
+	// close the write side to signal the other goroutine to finish.
+	done := make(chan struct{})
 	go func() {
 		io.Copy(backendConn, clientConn)
-		done <- struct{}{}
+		// Signal backend we're done sending
+		if tc, ok := backendConn.(*net.TCPConn); ok {
+			tc.CloseWrite()
+		}
 	}()
 	go func() {
+		defer close(done)
 		io.Copy(clientConn, backendConn)
-		done <- struct{}{}
 	}()
 	<-done
 }

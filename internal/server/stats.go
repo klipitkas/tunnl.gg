@@ -2,8 +2,9 @@ package server
 
 import (
 	"encoding/json"
+	"log"
+	"net"
 	"net/http"
-	"strings"
 	"sync/atomic"
 )
 
@@ -62,11 +63,12 @@ func (s *Server) GetStats(includeSubdomains bool) Stats {
 func (s *Server) StatsHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Only allow from localhost
-		remoteIP := r.RemoteAddr
-		if idx := strings.LastIndex(remoteIP, ":"); idx != -1 {
-			remoteIP = remoteIP[:idx]
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
 		}
-		if remoteIP != "127.0.0.1" && remoteIP != "::1" && remoteIP != "localhost" {
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
@@ -75,6 +77,8 @@ func (s *Server) StatsHandler() http.Handler {
 		stats := s.GetStats(includeSubdomains)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(stats)
+		if err := json.NewEncoder(w).Encode(stats); err != nil {
+			log.Printf("Failed to encode stats response: %v", err)
+		}
 	})
 }

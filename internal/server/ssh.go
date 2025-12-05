@@ -313,14 +313,17 @@ func (s *Server) forwardToSSH(sshConn *ssh.ServerConn, tcpConn net.Conn, tun *tu
 
 	go ssh.DiscardRequests(reqs)
 
-	done := make(chan struct{}, 2)
+	// Copy data bidirectionally. When one direction completes (or errors),
+	// close the write side to signal the other goroutine to finish.
+	done := make(chan struct{})
 	go func() {
 		io.Copy(channel, tcpConn)
-		done <- struct{}{}
+		// Signal SSH channel we're done sending
+		channel.CloseWrite()
 	}()
 	go func() {
+		defer close(done)
 		io.Copy(tcpConn, channel)
-		done <- struct{}{}
 	}()
 	<-done
 }

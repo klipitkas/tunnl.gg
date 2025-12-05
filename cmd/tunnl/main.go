@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"tunnl.gg/internal/config"
 	"tunnl.gg/internal/server"
@@ -76,65 +76,80 @@ func main() {
 	httpServer := &http.Server{
 		Addr:         cfg.HTTPAddr,
 		Handler:      server.HTTPRedirectHandler(),
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  30 * time.Second,
+		ReadTimeout:  config.HTTPReadTimeout,
+		WriteTimeout: config.HTTPWriteTimeout,
+		IdleTimeout:  config.HTTPIdleTimeout,
 	}
 
 	// HTTPS server
 	httpsServer := &http.Server{
 		Addr:           cfg.HTTPSAddr,
 		Handler:        srv,
-		ReadTimeout:    30 * time.Second,
-		WriteTimeout:   30 * time.Second,
-		IdleTimeout:    120 * time.Second,
+		ReadTimeout:    config.HTTPSReadTimeout,
+		WriteTimeout:   config.HTTPSWriteTimeout,
+		IdleTimeout:    config.HTTPSIdleTimeout,
 		MaxHeaderBytes: 1 << 20,
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		},
 	}
 
+	// Stats server (localhost only)
+	statsServer := &http.Server{
+		Addr:         cfg.StatsAddr,
+		Handler:      srv.StatsHandler(),
+		ReadTimeout:  config.StatsReadTimeout,
+		WriteTimeout: config.StatsWriteTimeout,
+	}
+
+	// Channel to signal fatal server errors
+	serverErr := make(chan error, 3)
+
 	log.Printf("HTTP server listening on %s (redirects to HTTPS)", cfg.HTTPAddr)
 	go func() {
 		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
-			log.Fatalf("HTTP server error: %v", err)
+			serverErr <- fmt.Errorf("HTTP server error: %w", err)
 		}
 	}()
 
 	log.Printf("HTTPS server listening on %s", cfg.HTTPSAddr)
 	go func() {
 		if err := httpsServer.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey); err != http.ErrServerClosed {
-			log.Fatalf("HTTPS server error: %v", err)
+			serverErr <- fmt.Errorf("HTTPS server error: %w", err)
 		}
 	}()
 
-	// Stats server (localhost only)
-	statsServer := &http.Server{
-		Addr:         cfg.StatsAddr,
-		Handler:      srv.StatsHandler(),
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 5 * time.Second,
-	}
 	log.Printf("Stats server listening on %s", cfg.StatsAddr)
 	go func() {
 		if err := statsServer.ListenAndServe(); err != http.ErrServerClosed {
-			log.Fatalf("Stats server error: %v", err)
+			serverErr <- fmt.Errorf("stats server error: %w", err)
 		}
 	}()
 
-	// Graceful shutdown
+	// Wait for shutdown signal or fatal server error
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
 
-	log.Println("Shutting down...")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	select {
+	case sig := <-sigCh:
+		log.Printf("Received signal %v, shutting down...", sig)
+	case err := <-serverErr:
+		log.Printf("Fatal error: %v, shutting down...", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), config.ShutdownTimeout)
 	defer cancel()
 
 	// Shutdown HTTP servers gracefully
-	httpServer.Shutdown(ctx)
-	httpsServer.Shutdown(ctx)
-	statsServer.Shutdown(ctx)
+	if err := httpServer.Shutdown(ctx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	}
+	if err := httpsServer.Shutdown(ctx); err != nil {
+		log.Printf("HTTPS server shutdown error: %v", err)
+	}
+	if err := statsServer.Shutdown(ctx); err != nil {
+		log.Printf("Stats server shutdown error: %v", err)
+	}
 
 	// Signal SSH goroutine to stop, then close listener
 	close(sshShutdown)
@@ -142,4 +157,5 @@ func main() {
 	<-sshDone // Wait for SSH accept loop to finish
 
 	srv.Stop()
+	log.Println("Shutdown complete")
 }

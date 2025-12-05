@@ -29,6 +29,17 @@ const (
 	// Response size limits
 	MaxResponseBodySize = 128 * 1024 * 1024 // 128MB
 
+	// HTTP server timeouts
+	HTTPReadTimeout    = 10 * time.Second
+	HTTPWriteTimeout   = 10 * time.Second
+	HTTPIdleTimeout    = 30 * time.Second
+	HTTPSReadTimeout   = 30 * time.Second
+	HTTPSWriteTimeout  = 30 * time.Second
+	HTTPSIdleTimeout   = 120 * time.Second
+	StatsReadTimeout   = 5 * time.Second
+	StatsWriteTimeout  = 5 * time.Second
+	ShutdownTimeout    = 10 * time.Second
+
 	// Interstitial warning cookie
 	WarningCookieName   = "tunnl_warned"
 	WarningCookieMaxAge = 86400 // 1 day
