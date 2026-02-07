@@ -75,7 +75,7 @@ Listens on port 22 (configurable) and handles remote port forwarding requests.
 **Flow:**
 
 1. Client connects: `ssh -t -R 80:localhost:8080 tunnl.gg`
-2. Server performs SSH handshake (no auth required)
+2. Server performs SSH handshake with 30s timeout (no auth required)
 3. Server sets `TCP_NODELAY` for low latency
 4. Server generates memorable subdomain (e.g., `happy-tiger-a1b2c3d4`)
 5. Server creates internal TCP listener for tunnel
@@ -157,6 +157,7 @@ type Server struct {
     sshConns      map[string][]*ssh.ServerConn // SSH connections per IP (for forced closure)
     mu            sync.RWMutex
     sshConfig     *ssh.ServerConfig
+    domain        string                     // Configurable domain (default: tunnl.gg)
 
     // Stats (atomic counters)
     totalConnections uint64
@@ -174,16 +175,17 @@ Represents a single active tunnel.
 ```go
 type Tunnel struct {
     Subdomain     string
-    Listener      net.Listener  // Internal listener (127.0.0.1:random)
-    CreatedAt     time.Time     // For max lifetime check
-    LastActive    time.Time     // For inactivity timeout
-    BindAddr      string        // Client's requested bind address
-    BindPort      uint32        // Client's requested bind port
-    ClientIP      string        // SSH client IP (for blocking on abuse)
+    Listener      net.Listener      // Internal listener (127.0.0.1:random)
+    CreatedAt     time.Time         // For max lifetime check
+    LastActive    time.Time         // For inactivity timeout
+    BindAddr      string            // Client's requested bind address
+    BindPort      uint32            // Client's requested bind port
+    ClientIP      string            // SSH client IP (for blocking on abuse)
     mu            sync.Mutex
-    rateLimiter   *RateLimiter  // Per-tunnel rate limiting
-    sshConn       SSHCloser     // Reference to SSH connection for forced closure
-    rateLimitHits int           // Count of rate limit violations
+    rateLimiter   *RateLimiter      // Per-tunnel rate limiting
+    sshConn       SSHCloser         // Reference to SSH connection for forced closure
+    rateLimitHits int               // Count of rate limit violations
+    transport     *http.Transport   // Reusable HTTP transport for proxying
 }
 ```
 
@@ -297,9 +299,11 @@ Browser                    Server                         Client
 
 4. **TLS Termination**: All public traffic is encrypted. Internal traffic (server↔SSH client) is also encrypted via SSH.
 
-5. **Host Validation**: Only requests to `*.tunnl.gg` are accepted.
+5. **Host Validation**: Only requests to `*.domain` are accepted (domain is configurable).
 
-6. **Rate Limiting**:
+6. **SSH Handshake Timeout**: 30-second deadline prevents malicious clients from holding connections indefinitely during handshake.
+
+7. **Rate Limiting**:
    - Per IP: Max 3 concurrent tunnels
    - Per tunnel: 10 requests/second, 20 burst
    - Per IP: Max 10 new connections per minute
@@ -316,17 +320,21 @@ Browser                    Server                         Client
    - Max request body: 128 MB
    - Max response body: 128 MB
 
-9. **Tunnel Lifetime**:
-   - Inactivity timeout: 2 hours
-   - Max lifetime: 24 hours (regardless of activity)
+9. **WebSocket Limits**:
+   - Max transfer: 1 GB per direction per connection (client can reconnect)
+   - Idle timeout: 2 hours (per-read deadline reset)
 
-10. **IP Spoofing Prevention**: X-Forwarded-For header is not trusted (service runs directly on internet).
+10. **Tunnel Lifetime**:
+    - Inactivity timeout: 2 hours
+    - Max lifetime: 24 hours (regardless of activity)
 
-11. **Phishing Protection**: Browser requests show interstitial warning page (cookie-based, 1 day).
+11. **IP Spoofing Prevention**: X-Forwarded-For header is not trusted (service runs directly on internet).
 
-12. **Security Headers**: All responses include `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy`.
+12. **Phishing Protection**: Browser requests show interstitial warning page (cookie-based, 1 day).
 
-13. **Stats Endpoint**: Only accessible from localhost (127.0.0.1, ::1).
+13. **Security Headers**: All responses include `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy`.
+
+14. **Stats Endpoint**: Only accessible from localhost (127.0.0.1, ::1).
 
 ## Configuration
 
@@ -339,6 +347,7 @@ Browser                    Server                         Client
 | `HOST_KEY_PATH` | `host_key` | SSH host key path |
 | `TLS_CERT` | `/etc/letsencrypt/live/tunnl.gg/fullchain.pem` | TLS certificate |
 | `TLS_KEY` | `/etc/letsencrypt/live/tunnl.gg/privkey.pem` | TLS private key |
+| `DOMAIN` | `tunnl.gg` | Domain name for the service |
 
 ## Limitations
 

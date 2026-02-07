@@ -28,6 +28,9 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 | Requests per tunnel | 10/s (burst 20) | Token bucket rate limiting |
 | Request body size | 128 MB | Max upload size |
 | Response body size | 128 MB | Max response size |
+| WebSocket transfer | 1 GB per direction | Max data per WebSocket connection |
+| WebSocket idle timeout | 2 hours | WebSocket closed after inactivity |
+| SSH handshake timeout | 30 seconds | Max time for SSH handshake to complete |
 | Connections per minute | 10 | New SSH connections per IP |
 | Inactivity timeout | 2 hours | Tunnel closes after inactivity |
 | Max tunnel lifetime | 24 hours | Absolute tunnel lifetime limit |
@@ -169,6 +172,7 @@ Environment=STATS_ADDR=127.0.0.1:9090
 Environment=HOST_KEY_PATH=/opt/tunnl/host_key
 Environment=TLS_CERT=/etc/letsencrypt/live/yourdomain.com/fullchain.pem
 Environment=TLS_KEY=/etc/letsencrypt/live/yourdomain.com/privkey.pem
+Environment=DOMAIN=yourdomain.com
 
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -197,6 +201,7 @@ sudo systemctl enable --now tunnl
 | `HOST_KEY_PATH` | `host_key` | Path to SSH host key |
 | `TLS_CERT` | `/etc/letsencrypt/live/tunnl.gg/fullchain.pem` | TLS certificate path |
 | `TLS_KEY` | `/etc/letsencrypt/live/tunnl.gg/privkey.pem` | TLS private key path |
+| `DOMAIN` | `tunnl.gg` | Domain name for the service |
 
 ## Usage
 
