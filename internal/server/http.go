@@ -76,6 +76,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	requestStart := time.Now()
+	sw := &statusCaptureWriter{ResponseWriter: w}
+
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "http"
@@ -105,7 +108,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	proxy.ServeHTTP(w, r)
+	proxy.ServeHTTP(sw, r)
+
+	if logger := tun.Logger(); logger != nil {
+		logger.LogRequest(r.Method, r.URL.Path, sw.status, time.Since(requestStart))
+	}
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tunnel.Tunnel, sub string) {
@@ -138,10 +145,18 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 		return
 	}
 
+	logger := tun.Logger()
+	wsPath := r.URL.Path
+	wsStart := time.Now()
+	if logger != nil {
+		logger.LogWebSocketOpen(wsPath)
+	}
+
 	// Copy data bidirectionally with limits
+	var backendBytes, clientBytes int64
 	done := make(chan struct{})
 	go func() {
-		copyWithLimits(backendConn, clientConn, config.MaxWebSocketTransfer, config.WebSocketIdleTimeout)
+		backendBytes, _ = copyWithLimits(backendConn, clientConn, config.MaxWebSocketTransfer, config.WebSocketIdleTimeout)
 		// Signal backend we're done sending
 		if tc, ok := backendConn.(*net.TCPConn); ok {
 			tc.CloseWrite()
@@ -149,14 +164,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 	}()
 	go func() {
 		defer close(done)
-		copyWithLimits(clientConn, backendConn, config.MaxWebSocketTransfer, config.WebSocketIdleTimeout)
+		clientBytes, _ = copyWithLimits(clientConn, backendConn, config.MaxWebSocketTransfer, config.WebSocketIdleTimeout)
 	}()
 	<-done
+
+	if logger != nil {
+		logger.LogWebSocketClose(wsPath, time.Since(wsStart), backendBytes+clientBytes)
+	}
 }
 
 // copyWithLimits copies from src to dst with a byte transfer limit and idle timeout.
 // It resets the read deadline on src after each successful read.
-func copyWithLimits(dst, src net.Conn, maxBytes int64, idleTimeout time.Duration) error {
+// Returns the number of bytes written and any error.
+func copyWithLimits(dst, src net.Conn, maxBytes int64, idleTimeout time.Duration) (int64, error) {
 	buf := make([]byte, 32*1024)
 	var written int64
 	for {
@@ -165,17 +185,17 @@ func copyWithLimits(dst, src net.Conn, maxBytes int64, idleTimeout time.Duration
 		if n > 0 {
 			written += int64(n)
 			if written > maxBytes {
-				return fmt.Errorf("transfer limit exceeded")
+				return written, fmt.Errorf("transfer limit exceeded")
 			}
 			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
-				return writeErr
+				return written, writeErr
 			}
 		}
 		if readErr != nil {
 			if readErr == io.EOF {
-				return nil
+				return written, nil
 			}
-			return readErr
+			return written, readErr
 		}
 	}
 }
@@ -251,6 +271,34 @@ func (l *limitedReadCloser) Read(p []byte) (n int, err error) {
 
 func (l *limitedReadCloser) Close() error {
 	return l.rc.Close()
+}
+
+// statusCaptureWriter wraps http.ResponseWriter to capture the status code.
+type statusCaptureWriter struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (w *statusCaptureWriter) WriteHeader(code int) {
+	if !w.wroteHeader {
+		w.status = code
+		w.wroteHeader = true
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusCaptureWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.status = http.StatusOK
+		w.wroteHeader = true
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+// Unwrap returns the underlying ResponseWriter for interface passthrough (e.g., http.Flusher).
+func (w *statusCaptureWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 // HTTPRedirectHandler returns an http.Handler that redirects HTTP to HTTPS

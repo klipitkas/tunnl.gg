@@ -200,6 +200,10 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	fmt.Fprint(channel, urlMessage)
 
+	logger := tunnel.NewRequestLogger(channel, config.LogBufferSize)
+	tun.SetLogger(logger)
+	defer logger.Close()
+
 	// Accept connections on the tunnel listener
 	go func() {
 		for {

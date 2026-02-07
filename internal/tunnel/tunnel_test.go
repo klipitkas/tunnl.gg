@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"bytes"
 	"errors"
 	"net"
 	"sync"
@@ -186,6 +187,46 @@ func TestCloseSSH_Nil(t *testing.T) {
 	tun := newTestTunnel(t)
 	// Should not panic when no SSH connection is set
 	tun.CloseSSH()
+}
+
+func TestSetLogger(t *testing.T) {
+	tun := newTestTunnel(t)
+	var buf bytes.Buffer
+	logger := NewRequestLogger(&buf, 16)
+	defer logger.Close()
+
+	tun.SetLogger(logger)
+
+	got := tun.Logger()
+	if got != logger {
+		t.Error("SetLogger()/Logger() round-trip failed")
+	}
+}
+
+func TestLogger_NilByDefault(t *testing.T) {
+	tun := newTestTunnel(t)
+	if tun.Logger() != nil {
+		t.Error("Logger() should be nil by default")
+	}
+}
+
+func TestClose_ClosesLogger(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+	tun := New("test-sub-00000000", ln, "127.0.0.1", 8080, "127.0.0.1")
+
+	var buf bytes.Buffer
+	logger := NewRequestLogger(&buf, 16)
+	tun.SetLogger(logger)
+
+	tun.Close()
+
+	// After Close, logger should be nil
+	if tun.Logger() != nil {
+		t.Error("Close() should nil out logger")
+	}
 }
 
 func TestClose(t *testing.T) {

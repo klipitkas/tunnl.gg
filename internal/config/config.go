@@ -50,6 +50,9 @@ const (
 	WebSocketIdleTimeout = 2 * time.Hour
 	MaxWebSocketTransfer = 1024 * 1024 * 1024 // 1GB
 
+	// Request logging
+	LogBufferSize = 128 // buffered channel size for SSH terminal request logs
+
 	// Interstitial warning cookie
 	WarningCookieName   = "tunnl_warned"
 	WarningCookieMaxAge = 86400 // 1 day

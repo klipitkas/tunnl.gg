@@ -225,11 +225,14 @@ func TestCopyWithLimits(t *testing.T) {
 			received <- buf
 		}()
 
-		err := copyWithLimits(dstWriter, client, 1024, 5*time.Second)
+		n, err := copyWithLimits(dstWriter, client, 1024, 5*time.Second)
 		dstWriter.Close()
 
 		if err != nil {
 			t.Fatalf("copyWithLimits error: %v", err)
+		}
+		if n != int64(len(data)) {
+			t.Errorf("copyWithLimits returned %d bytes, want %d", n, len(data))
 		}
 
 		got := <-received
@@ -259,7 +262,7 @@ func TestCopyWithLimits(t *testing.T) {
 		// Drain dst to avoid blocking
 		go io.Copy(io.Discard, dst)
 
-		err := copyWithLimits(dstWriter, client, 500, 5*time.Second)
+		_, err := copyWithLimits(dstWriter, client, 500, 5*time.Second)
 		if err == nil || !strings.Contains(err.Error(), "transfer limit exceeded") {
 			t.Errorf("expected transfer limit exceeded error, got: %v", err)
 		}
@@ -277,7 +280,7 @@ func TestCopyWithLimits(t *testing.T) {
 		go io.Copy(io.Discard, dst)
 
 		// Don't write anything — should timeout
-		err := copyWithLimits(dstWriter, client, 1024, 50*time.Millisecond)
+		_, err := copyWithLimits(dstWriter, client, 1024, 50*time.Millisecond)
 		if err == nil {
 			t.Error("expected timeout error, got nil")
 		}
@@ -346,6 +349,48 @@ func TestHTTPRedirectHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStatusCaptureWriter(t *testing.T) {
+	t.Run("captures explicit status", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		sw := &statusCaptureWriter{ResponseWriter: rec}
+		sw.WriteHeader(http.StatusNotFound)
+
+		if sw.status != http.StatusNotFound {
+			t.Errorf("status = %d, want %d", sw.status, http.StatusNotFound)
+		}
+	})
+
+	t.Run("defaults to 200 on Write", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		sw := &statusCaptureWriter{ResponseWriter: rec}
+		sw.Write([]byte("hello"))
+
+		if sw.status != http.StatusOK {
+			t.Errorf("status = %d, want %d", sw.status, http.StatusOK)
+		}
+	})
+
+	t.Run("first WriteHeader wins", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		sw := &statusCaptureWriter{ResponseWriter: rec}
+		sw.WriteHeader(http.StatusCreated)
+		sw.WriteHeader(http.StatusNotFound)
+
+		if sw.status != http.StatusCreated {
+			t.Errorf("status = %d, want %d (first call should win)", sw.status, http.StatusCreated)
+		}
+	})
+
+	t.Run("Unwrap returns inner writer", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		sw := &statusCaptureWriter{ResponseWriter: rec}
+
+		if sw.Unwrap() != rec {
+			t.Error("Unwrap() should return the underlying ResponseWriter")
+		}
+	})
 }
 
 func TestRedirectToWarningPage(t *testing.T) {

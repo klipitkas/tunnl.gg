@@ -29,6 +29,7 @@ type Tunnel struct {
 	sshConn       SSHCloser        // Reference to SSH connection for forced closure
 	rateLimitHits int              // Count of rate limit violations
 	transport     *http.Transport  // Reusable HTTP transport for proxying
+	logger        *RequestLogger   // Async request logger for SSH terminal output
 }
 
 // New creates a new tunnel with the given parameters
@@ -122,15 +123,36 @@ func (t *Tunnel) CloseSSH() {
 	}
 }
 
+// SetLogger sets the request logger for SSH terminal output
+func (t *Tunnel) SetLogger(l *RequestLogger) {
+	t.mu.Lock()
+	t.logger = l
+	t.mu.Unlock()
+}
+
+// Logger returns the request logger, or nil if none is set
+func (t *Tunnel) Logger() *RequestLogger {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.logger
+}
+
 // Transport returns the reusable HTTP transport for this tunnel
 func (t *Tunnel) Transport() *http.Transport {
 	return t.transport
 }
 
-// Close closes the tunnel's listener and cleans up the transport
+// Close closes the tunnel's listener and cleans up the transport and logger
 func (t *Tunnel) Close() {
 	t.Listener.Close()
 	if t.transport != nil {
 		t.transport.CloseIdleConnections()
+	}
+	t.mu.Lock()
+	l := t.logger
+	t.logger = nil
+	t.mu.Unlock()
+	if l != nil {
+		l.Close()
 	}
 }
