@@ -1,12 +1,18 @@
 package config
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 const (
-	Domain            = "tunnl.gg"
+	DefaultDomain     = "tunnl.gg"
 	InactivityTimeout = 2 * time.Hour
 	MaxTunnelsPerIP   = 3                // Reduced from 5
 	MaxTotalTunnels   = 1000
+
+	// SSH handshake timeout
+	SSHHandshakeTimeout = 30 * time.Second
 
 	// HTTP rate limiting per tunnel
 	RequestsPerSecond = 10 // requests per second per tunnel
@@ -40,6 +46,10 @@ const (
 	StatsWriteTimeout  = 5 * time.Second
 	ShutdownTimeout    = 10 * time.Second
 
+	// WebSocket limits
+	WebSocketIdleTimeout = 2 * time.Hour
+	MaxWebSocketTransfer = 1024 * 1024 * 1024 // 1GB
+
 	// Interstitial warning cookie
 	WarningCookieName   = "tunnl_warned"
 	WarningCookieMaxAge = 86400 // 1 day
@@ -54,6 +64,7 @@ type Config struct {
 	HostKeyPath string
 	TLSCert     string
 	TLSKey      string
+	Domain      string
 }
 
 // Default returns configuration with default values
@@ -64,7 +75,8 @@ func Default() *Config {
 		HTTPSAddr:   ":443",
 		StatsAddr:   "127.0.0.1:9090",
 		HostKeyPath: "host_key",
-		TLSCert:     "/etc/letsencrypt/live/tunnl.gg/fullchain.pem",
-		TLSKey:      "/etc/letsencrypt/live/tunnl.gg/privkey.pem",
+		TLSCert:     fmt.Sprintf("/etc/letsencrypt/live/%s/fullchain.pem", DefaultDomain),
+		TLSKey:      fmt.Sprintf("/etc/letsencrypt/live/%s/privkey.pem", DefaultDomain),
+		Domain:      DefaultDomain,
 	}
 }
