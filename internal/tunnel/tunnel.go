@@ -1,7 +1,9 @@
 package tunnel
 
 import (
+	"context"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -15,22 +17,24 @@ type SSHCloser interface {
 
 // Tunnel represents an active SSH tunnel
 type Tunnel struct {
-	Subdomain       string
-	Listener        net.Listener
-	CreatedAt       time.Time
-	LastActive      time.Time
-	BindAddr        string
-	BindPort        uint32
-	ClientIP        string    // SSH client IP that created this tunnel
-	mu              sync.Mutex
-	rateLimiter     *RateLimiter
-	sshConn         SSHCloser // Reference to SSH connection for forced closure
-	rateLimitHits   int       // Count of rate limit violations
+	Subdomain     string
+	Listener      net.Listener
+	CreatedAt     time.Time
+	LastActive    time.Time
+	BindAddr      string
+	BindPort      uint32
+	ClientIP      string // SSH client IP that created this tunnel
+	mu            sync.Mutex
+	rateLimiter   *RateLimiter
+	sshConn       SSHCloser        // Reference to SSH connection for forced closure
+	rateLimitHits int              // Count of rate limit violations
+	transport     *http.Transport  // Reusable HTTP transport for proxying
 }
 
 // New creates a new tunnel with the given parameters
 func New(subdomain string, listener net.Listener, bindAddr string, bindPort uint32, clientIP string) *Tunnel {
 	now := time.Now()
+	listenerAddr := listener.Addr().String()
 	return &Tunnel{
 		Subdomain:   subdomain,
 		Listener:    listener,
@@ -40,6 +44,13 @@ func New(subdomain string, listener net.Listener, bindAddr string, bindPort uint
 		BindPort:    bindPort,
 		ClientIP:    clientIP,
 		rateLimiter: NewRateLimiter(config.RequestsPerSecond, config.BurstSize),
+		transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return net.DialTimeout("tcp", listenerAddr, 10*time.Second)
+			},
+			MaxIdleConns:    10,
+			IdleConnTimeout: 90 * time.Second,
+		},
 	}
 }
 
@@ -111,7 +122,15 @@ func (t *Tunnel) CloseSSH() {
 	}
 }
 
-// Close closes the tunnel's listener
+// Transport returns the reusable HTTP transport for this tunnel
+func (t *Tunnel) Transport() *http.Transport {
+	return t.transport
+}
+
+// Close closes the tunnel's listener and cleans up the transport
 func (t *Tunnel) Close() {
 	t.Listener.Close()
+	if t.transport != nil {
+		t.transport.CloseIdleConnections()
+	}
 }
