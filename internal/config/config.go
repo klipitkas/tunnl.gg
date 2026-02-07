@@ -4,7 +4,7 @@ import "time"
 
 const (
 	Domain            = "tunnl.gg"
-	InactivityTimeout = 30 * time.Minute // Reduced from 1 hour
+	InactivityTimeout = 2 * time.Hour
 	MaxTunnelsPerIP   = 3                // Reduced from 5
 	MaxTotalTunnels   = 1000
 

@@ -10,7 +10,7 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 
 ## Features
 
-- Memorable subdomain per connection (e.g., `https://happy-tiger-a1b2.tunnl.gg`)
+- Memorable subdomain per connection (e.g., `https://happy-tiger-a1b2c3d4.tunnl.gg`)
 - Automatic SSL via Let's Encrypt
 - WebSocket support
 - Comprehensive rate limiting and abuse protection
@@ -29,7 +29,7 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 | Request body size | 128 MB | Max upload size |
 | Response body size | 128 MB | Max response size |
 | Connections per minute | 10 | New SSH connections per IP |
-| Inactivity timeout | 30 min | Tunnel closes after inactivity |
+| Inactivity timeout | 2 hours | Tunnel closes after inactivity |
 | Max tunnel lifetime | 24 hours | Absolute tunnel lifetime limit |
 | Block duration | 1 hour | Temporary IP block after abuse |
 | Violations before block | 10 | Rate limit violations before tunnel kill + IP block |
@@ -224,7 +224,7 @@ ssh -t -R 80:localhost:8080 -o ServerAliveInterval=60 proxy.tunnl.gg
 Browser requests show a phishing warning (cookie-based, lasts 1 day). To skip programmatically:
 
 ```bash
-curl -H "tunnl-skip-browser-warning: 1" https://happy-tiger-a1b2.tunnl.gg
+curl -H "tunnl-skip-browser-warning: 1" https://happy-tiger-a1b2c3d4.tunnl.gg
 ```
 
 ## Stats Endpoint
@@ -250,7 +250,7 @@ Response:
   "blocked_ips": 1,
   "total_blocked": 5,
   "total_rate_limited": 23,
-  "subdomains": ["happy-tiger-a1b2", "calm-eagle-c3d4", "swift-wolf-e5f6"]
+  "subdomains": ["happy-tiger-a1b2c3d4", "calm-eagle-e5f6a7b8", "swift-wolf-d9e0f1a2"]
 }
 ```
 
@@ -288,7 +288,7 @@ Response:
          │                                │
          ▼                                │
    ┌──────────┐     HTTPS request to      │
-   │ SSH Conn │  ←─ happy-tiger-a1b2 ─────┘
+   │ SSH Conn │  ←─ happy-tiger-a1b2c3d4 ─────┘
    │ Client   │
    └────┬─────┘
         │
@@ -299,8 +299,8 @@ Response:
 ```
 
 1. Client runs `ssh -t -R 80:localhost:8080 proxy.tunnl.gg`
-2. Server generates subdomain (e.g., `happy-tiger-a1b2`) and shows URL
-3. Browser requests `https://happy-tiger-a1b2.tunnl.gg`
+2. Server generates subdomain (e.g., `happy-tiger-a1b2c3d4`) and shows URL
+3. Browser requests `https://happy-tiger-a1b2c3d4.tunnl.gg`
 4. Server looks up tunnel, proxies request via SSH to client
 5. Client forwards to `localhost:8080`
 

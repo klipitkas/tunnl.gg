@@ -23,12 +23,12 @@ Tunnl.gg is a minimal SSH tunneling service that exposes local applications to t
 │  │                         Tunnel Registry                             │    │
 │  │                     map[subdomain]*Tunnel                           │    │
 │  │                                                                     │    │
-│  │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │    │
-│  │   │happy-tiger-  │  │calm-eagle-   │  │swift-wolf-   │    ...       │    │
-│  │   │a1b2          │  │c3d4          │  │e5f6          │              │    │
-│  │   │Listener:X    │  │Listener:Y    │  │Listener:Z    │              │    │
-│  │   │RateLimiter   │  │RateLimiter   │  │RateLimiter   │              │    │
-│  │   └──────┬───────┘  └──────┬───────┘  └──────┬───────┘              │    │
+│  │   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  │    │
+│  │   │happy-tiger-      │  │calm-eagle-       │  │swift-wolf-       │  │    │
+│  │   │a1b2c3d4          │  │e5f6a7b8          │  │d9e0f1a2          │  │    │
+│  │   │Listener:X        │  │Listener:Y        │  │Listener:Z        │  │    │
+│  │   │RateLimiter       │  │RateLimiter       │  │RateLimiter       │  │    │
+│  │   └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘  │    │
 │  └──────────┼─────────────────┼─────────────────┼──────────────────────┘    │
 │             │                 │                 │                           │
 └─────────────┼─────────────────┼─────────────────┼───────────────────────────┘
@@ -77,7 +77,7 @@ Listens on port 22 (configurable) and handles remote port forwarding requests.
 1. Client connects: `ssh -t -R 80:localhost:8080 tunnl.gg`
 2. Server performs SSH handshake (no auth required)
 3. Server sets `TCP_NODELAY` for low latency
-4. Server generates memorable subdomain (e.g., `happy-tiger-a1b2`)
+4. Server generates memorable subdomain (e.g., `happy-tiger-a1b2c3d4`)
 5. Server creates internal TCP listener for tunnel
 6. Server registers tunnel in registry
 7. Server sends URL to client via session channel
@@ -112,7 +112,7 @@ Listens on port 443 with pre-configured TLS certificates.
 
 **Request flow:**
 
-1. Extract subdomain from `Host` header (e.g., `happy-tiger-a1b2.tunnl.gg`)
+1. Extract subdomain from `Host` header (e.g., `happy-tiger-a1b2c3d4.tunnl.gg`)
 2. Validate subdomain format (adjective-noun-hex pattern)
 3. Look up tunnel in registry
 4. Check rate limit (10 req/s per tunnel)
@@ -140,7 +140,7 @@ Listens on `127.0.0.1:9090` (localhost only) and exposes metrics.
   "blocked_ips": 1,
   "total_blocked": 5,
   "total_rate_limited": 23,
-  "subdomains": ["happy-tiger-a1b2", "calm-eagle-c3d4"]
+  "subdomains": ["happy-tiger-a1b2c3d4", "calm-eagle-e5f6a7b8"]
 }
 ```
 
@@ -191,13 +191,13 @@ type Tunnel struct {
 
 Generates memorable, random subdomains.
 
-**Format:** `adjective-noun-xxxx` (4 hex chars)
+**Format:** `adjective-noun-xxxxxxxx` (8 hex chars)
 
-**Examples:** `happy-tiger-a1b2`, `calm-eagle-c3d4`, `swift-wolf-e5f6`
+**Examples:** `happy-tiger-a1b2c3d4`, `calm-eagle-e5f6a7b8`, `swift-wolf-d9e0f1a2`
 
 **Components:**
 
-- 32 adjectives × 32 nouns × 65536 hex combinations = ~67 million possible subdomains
+- 32 adjectives × 32 nouns × 4,294,967,296 hex combinations = ~4.4 trillion possible subdomains
 - Whitelist-based validation prevents injection attacks
 
 ### 8. Rate Limiter (`internal/tunnel/ratelimiter.go`)
@@ -216,7 +216,7 @@ type RateLimiter struct {
 
 ### 9. Inactivity Monitor
 
-Per-tunnel goroutine that checks every minute if `LastActive` exceeds 30 minutes or if `CreatedAt` exceeds 24 hours (max lifetime).
+Per-tunnel goroutine that checks every minute if `LastActive` exceeds 2 hours or if `CreatedAt` exceeds 24 hours (max lifetime).
 If expired, closes the SSH connection, which triggers cleanup.
 
 ### 10. Abuse Tracker (`internal/server/abuse.go`)
@@ -317,7 +317,7 @@ Browser                    Server                         Client
    - Max response body: 128 MB
 
 9. **Tunnel Lifetime**:
-   - Inactivity timeout: 30 minutes
+   - Inactivity timeout: 2 hours
    - Max lifetime: 24 hours (regardless of activity)
 
 10. **IP Spoofing Prevention**: X-Forwarded-For header is not trusted (service runs directly on internet).
