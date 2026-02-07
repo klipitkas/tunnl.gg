@@ -25,7 +25,7 @@ var nouns = []string{
 func Generate() (string, error) {
 	adjIdx := make([]byte, 1)
 	nounIdx := make([]byte, 1)
-	hexBytes := make([]byte, 2) // 2 bytes = 4 hex characters
+	hexBytes := make([]byte, 4) // 4 bytes = 8 hex characters for better entropy
 
 	if _, err := rand.Read(adjIdx); err != nil {
 		return "", fmt.Errorf("failed to generate random bytes: %w", err)

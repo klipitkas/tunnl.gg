@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"io"
 	"log"
@@ -182,7 +183,7 @@ func hasWarningCookie(r *http.Request, sub string) bool {
 	if err != nil {
 		return false
 	}
-	return cookie.Value == "1"
+	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte("1")) == 1
 }
 
 func redirectToWarningPage(w http.ResponseWriter, r *http.Request, sub string) {
@@ -210,9 +211,9 @@ func stripPort(host string) string {
 
 // limitedReadCloser wraps an io.ReadCloser and limits the number of bytes read
 type limitedReadCloser struct {
-	rc      io.ReadCloser
-	limit   int64
-	read    int64
+	rc    io.ReadCloser
+	limit int64
+	read  int64
 }
 
 func (l *limitedReadCloser) Read(p []byte) (n int, err error) {
