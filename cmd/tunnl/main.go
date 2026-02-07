@@ -39,8 +39,11 @@ func main() {
 	if v := os.Getenv("STATS_ADDR"); v != "" {
 		cfg.StatsAddr = v
 	}
+	if v := os.Getenv("DOMAIN"); v != "" {
+		cfg.Domain = v
+	}
 
-	srv, err := server.New(cfg.HostKeyPath)
+	srv, err := server.New(cfg.HostKeyPath, cfg.Domain)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
@@ -75,7 +78,7 @@ func main() {
 	// HTTP server for redirect
 	httpServer := &http.Server{
 		Addr:         cfg.HTTPAddr,
-		Handler:      server.HTTPRedirectHandler(),
+		Handler:      srv.HTTPRedirectHandler(),
 		ReadTimeout:  config.HTTPReadTimeout,
 		WriteTimeout: config.HTTPWriteTimeout,
 		IdleTimeout:  config.HTTPIdleTimeout,

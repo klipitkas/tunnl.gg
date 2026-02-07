@@ -26,6 +26,7 @@ type Server struct {
 	sshConns      map[string][]*ssh.ServerConn // SSH connections per IP for forced closure
 	mu            sync.RWMutex
 	sshConfig     *ssh.ServerConfig
+	domain        string
 
 	// Stats
 	totalConnections uint64
@@ -36,12 +37,13 @@ type Server struct {
 }
 
 // New creates a new server instance
-func New(hostKeyPath string) (*Server, error) {
+func New(hostKeyPath string, domain string) (*Server, error) {
 	s := &Server{
 		tunnels:       make(map[string]*tunnel.Tunnel),
 		ipConnections: make(map[string]int),
 		sshConns:      make(map[string][]*ssh.ServerConn),
 		abuseTracker:  NewAbuseTracker(),
+		domain:        domain,
 	}
 
 	// Set callback to close SSH connections when IP is blocked
@@ -64,6 +66,11 @@ func New(hostKeyPath string) (*Server, error) {
 	s.sshConfig.AddHostKey(hostKey)
 
 	return s, nil
+}
+
+// Domain returns the configured domain
+func (s *Server) Domain() string {
+	return s.domain
 }
 
 // SSHConfig returns the SSH server configuration

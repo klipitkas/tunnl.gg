@@ -38,11 +38,13 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	}
 
 	// Do SSH handshake first so we can send error messages to the client
+	conn.SetDeadline(time.Now().Add(config.SSHHandshakeTimeout))
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.sshConfig)
 	if err != nil {
 		log.Printf("SSH handshake failed: %v", err)
 		return
 	}
+	conn.SetDeadline(time.Time{}) // clear deadline after successful handshake
 	defer sshConn.Close()
 
 	// Check rate limits and reservations after handshake
@@ -128,10 +130,10 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	defer s.RemoveTunnel(sub)
 
-	url := fmt.Sprintf("https://%s.%s", sub, config.Domain)
+	url := fmt.Sprintf("https://%s.%s", sub, s.domain)
 	expiresAt := tun.CreatedAt.Add(config.MaxTunnelLifetime).Format("Jan 02, 2006 at 15:04 MST")
 
-	expiresLine := fmt.Sprintf("%s (or %dm idle)", expiresAt, int(config.InactivityTimeout.Minutes()))
+	expiresLine := fmt.Sprintf("%s (or %s idle)", expiresAt, formatDuration(config.InactivityTimeout))
 
 	urlMessage := fmt.Sprintf("\r\n"+
 		"  +-------------------------------------------------------------+\r\n"+
@@ -326,4 +328,13 @@ func (s *Server) forwardToSSH(sshConn *ssh.ServerConn, tcpConn net.Conn, tun *tu
 		io.Copy(tcpConn, channel)
 	}()
 	<-done
+}
+
+// formatDuration formats a duration as a human-readable string (e.g., "2h", "45m")
+func formatDuration(d time.Duration) string {
+	if d >= time.Hour {
+		h := int(d.Hours())
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dm", int(d.Minutes()))
 }

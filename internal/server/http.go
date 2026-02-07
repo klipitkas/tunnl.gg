@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"crypto/subtle"
 	"fmt"
 	"io"
@@ -31,12 +30,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	host := stripPort(r.Host)
 
-	if !strings.HasSuffix(host, "."+config.Domain) {
+	if !strings.HasSuffix(host, "."+s.domain) {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 
-	sub := strings.TrimSuffix(host, "."+config.Domain)
+	sub := strings.TrimSuffix(host, "."+s.domain)
 
 	if !subdomain.IsValid(sub) {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
@@ -68,7 +67,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if isBrowserRequest(r) &&
 		r.Header.Get("tunnl-skip-browser-warning") == "" &&
 		!hasWarningCookie(r, sub) {
-		redirectToWarningPage(w, r, sub)
+		s.redirectToWarningPage(w, r, sub)
 		return
 	}
 
@@ -83,11 +82,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			req.URL.Host = tun.Listener.Addr().String()
 			req.Host = r.Host
 		},
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return net.DialTimeout("tcp", tun.Listener.Addr().String(), 10*time.Second)
-			},
-		},
+		Transport: tun.Transport(),
 		ModifyResponse: func(resp *http.Response) error {
 			// Enforce response body size limit
 			if resp.ContentLength > config.MaxResponseBodySize {
@@ -143,11 +138,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 		return
 	}
 
-	// Copy data bidirectionally. When one direction completes (or errors),
-	// close the write side to signal the other goroutine to finish.
+	// Copy data bidirectionally with limits
 	done := make(chan struct{})
 	go func() {
-		io.Copy(backendConn, clientConn)
+		copyWithLimits(backendConn, clientConn, config.MaxWebSocketTransfer, config.WebSocketIdleTimeout)
 		// Signal backend we're done sending
 		if tc, ok := backendConn.(*net.TCPConn); ok {
 			tc.CloseWrite()
@@ -155,9 +149,35 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 	}()
 	go func() {
 		defer close(done)
-		io.Copy(clientConn, backendConn)
+		copyWithLimits(clientConn, backendConn, config.MaxWebSocketTransfer, config.WebSocketIdleTimeout)
 	}()
 	<-done
+}
+
+// copyWithLimits copies from src to dst with a byte transfer limit and idle timeout.
+// It resets the read deadline on src after each successful read.
+func copyWithLimits(dst, src net.Conn, maxBytes int64, idleTimeout time.Duration) error {
+	buf := make([]byte, 32*1024)
+	var written int64
+	for {
+		src.SetReadDeadline(time.Now().Add(idleTimeout))
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			written += int64(n)
+			if written > maxBytes {
+				return fmt.Errorf("transfer limit exceeded")
+			}
+			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
+				return writeErr
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				return nil
+			}
+			return readErr
+		}
+	}
 }
 
 func setSecurityHeaders(w http.ResponseWriter) {
@@ -186,11 +206,11 @@ func hasWarningCookie(r *http.Request, sub string) bool {
 	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte("1")) == 1
 }
 
-func redirectToWarningPage(w http.ResponseWriter, r *http.Request, sub string) {
+func (s *Server) redirectToWarningPage(w http.ResponseWriter, r *http.Request, sub string) {
 	originalURL := "https://" + r.Host + r.URL.RequestURI()
-	fullSubdomain := sub + "." + config.Domain
+	fullSubdomain := sub + "." + s.domain
 	warningURL := fmt.Sprintf("https://%s/#/warning?redirect=%s&subdomain=%s",
-		config.Domain,
+		s.domain,
 		url.QueryEscape(originalURL),
 		url.QueryEscape(fullSubdomain))
 	http.Redirect(w, r, warningURL, http.StatusTemporaryRedirect)
@@ -234,10 +254,10 @@ func (l *limitedReadCloser) Close() error {
 }
 
 // HTTPRedirectHandler returns an http.Handler that redirects HTTP to HTTPS
-func HTTPRedirectHandler() http.Handler {
+func (s *Server) HTTPRedirectHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := stripPort(r.Host)
-		if !strings.HasSuffix(host, "."+config.Domain) && host != config.Domain {
+		if !strings.HasSuffix(host, "."+s.domain) && host != s.domain {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
 			return
 		}
