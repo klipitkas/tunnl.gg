@@ -75,8 +75,8 @@ func IsValid(s string) bool {
 		return false
 	}
 
-	// Check hex suffix (4 characters)
-	if len(parts[2]) != 4 {
+	// Check hex suffix (8 characters)
+	if len(parts[2]) != 8 {
 		return false
 	}
 	for _, c := range parts[2] {
