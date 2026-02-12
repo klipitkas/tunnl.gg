@@ -132,19 +132,21 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	url := fmt.Sprintf("https://%s.%s", sub, s.domain)
 	expiresAt := tun.CreatedAt.Add(config.MaxTunnelLifetime).Format("Jan 02, 2006 at 15:04 MST")
-
 	expiresLine := fmt.Sprintf("%s (or %s idle)", expiresAt, formatDuration(config.InactivityTimeout))
 
-	urlMessage := fmt.Sprintf("\r\n"+
-		"  +-------------------------------------------------------------+\r\n"+
-		"  |                         tunnl.gg                            |\r\n"+
-		"  +-------------------------------------------------------------+\r\n"+
-		"  |  URL: %-53s |\r\n"+
-		"  |  Expires: %-49s |\r\n"+
-		"  +-------------------------------------------------------------+\r\n"+
-		"  |  Press Ctrl+C to close the tunnel                           |\r\n"+
-		"  +-------------------------------------------------------------+\r\n\r\n",
-		url, expiresLine)
+	// ANSI color codes
+	const (
+		reset     = "\033[0m"
+		gray      = "\033[38;5;245m"
+		boldGreen = "\033[1;32m"
+		purple    = "\033[38;5;141m"
+	)
+
+	urlMessage := "\r\n" +
+		gray + "Connected to " + s.domain + "." + reset + "\r\n\r\n" +
+		boldGreen + "Tunnel is live!" + reset + "\r\n\r\n" +
+		gray + "Public URL: " + purple + url + reset + "\r\n" +
+		gray + "Expires: " + expiresLine + reset + "\r\n\r\n"
 
 	// Inactivity checker
 	go func() {
