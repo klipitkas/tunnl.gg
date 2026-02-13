@@ -143,10 +143,10 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	)
 
 	urlMessage := "\r\n" +
-		gray + "Connected to " + s.domain + "." + reset + "\r\n\r\n" +
-		boldGreen + "Tunnel is live!" + reset + "\r\n\r\n" +
+		gray + "Connected to " + s.domain + "." + reset + "\r\n" +
+		boldGreen + "Tunnel is live!" + reset + "\r\n" +
 		gray + "Public URL: " + purple + url + reset + "\r\n" +
-		gray + "Expires: " + expiresLine + reset + "\r\n\r\n"
+		gray + "Expires:    " + expiresLine + reset + "\r\n\r\n"
 
 	// Inactivity checker
 	go func() {
