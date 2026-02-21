@@ -11,7 +11,16 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"tunnl.gg/internal/config"
+	"tunnl.gg/internal/subdomain"
 	"tunnl.gg/internal/tunnel"
+)
+
+// ANSI color codes for SSH terminal output.
+const (
+	ansiReset     = "\033[0m"
+	ansiGray      = "\033[38;5;245m"
+	ansiBoldGreen = "\033[1;32m"
+	ansiPurple    = "\033[38;5;141m"
 )
 
 type tcpipForwardRequest struct {
@@ -24,6 +33,13 @@ type forwardedTCPPayload struct {
 	Port       uint32
 	OriginAddr string
 	OriginPort uint32
+}
+
+// tunnelEntry groups a tunnel with its listener and subdomain.
+type tunnelEntry struct {
+	sub      string
+	listener net.Listener
+	tun      *tunnel.Tunnel
 }
 
 // HandleSSHConnection handles a new SSH connection
@@ -65,32 +81,31 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	s.IncrementConnections()
 
-	sub, err := s.GenerateUniqueSubdomain()
+	baseSub, err := s.GenerateUniqueSubdomain()
 	if err != nil {
 		log.Printf("Failed to generate subdomain: %v", err)
 		return
 	}
-	log.Printf("New SSH connection from %s, assigned subdomain: %s", sshConn.RemoteAddr(), sub)
-
-	tunnelListener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		log.Printf("Failed to create tunnel listener: %v", err)
-		return
-	}
-	// Ensure listener is closed on early return (before tunnel registration)
-	// This is safe even after tunnel registration since net.Listener.Close() is idempotent
-	defer tunnelListener.Close()
-
-	var bindAddr string
-	var bindPort uint32
-	tunnelRegistered := make(chan struct{})
-	var tun *tunnel.Tunnel
+	log.Printf("New SSH connection from %s, assigned base subdomain: %s", sshConn.RemoteAddr(), baseSub)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle global requests (port forwarding)
+	// Collect all tunnel entries via request handler goroutine.
+	// The goroutine owns the entries slice exclusively until it finishes.
+	entriesCh := make(chan []*tunnelEntry, 1)
+	firstTunnelRegistered := make(chan struct{})
+
+	// Handle global requests (port forwarding) — one per tcpip-forward
 	go func() {
+		var entries []*tunnelEntry
+		defer func() { entriesCh <- entries }()
+
+		// After the first tunnel, wait briefly for additional -R forwards
+		// (SSH clients send them serially in quick succession), then return
+		// to hand the final entries slice to the main goroutine.
+		var batchTimer <-chan time.Time
+
 		for {
 			select {
 			case req, ok := <-reqs:
@@ -104,59 +119,107 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 						req.Reply(false, nil)
 						continue
 					}
-					bindAddr = fwdReq.BindAddr
-					bindPort = fwdReq.BindPort
-					tun = s.RegisterTunnel(sub, tunnelListener, bindAddr, bindPort, clientIP)
+
+					// Enforce per-connection port limit
+					if len(entries) >= config.MaxPortsPerConnection {
+						log.Printf("Port limit reached for %s (max %d)", baseSub, config.MaxPortsPerConnection)
+						req.Reply(false, nil)
+						continue
+					}
+
+					// Determine subdomain: first gets base, rest get base-port
+					sub := baseSub
+					if len(entries) > 0 {
+						sub = subdomain.WithPort(baseSub, fwdReq.BindPort)
+					}
+
+					// Create listener for this port
+					listener, err := net.Listen("tcp", "127.0.0.1:0")
+					if err != nil {
+						log.Printf("Failed to create tunnel listener: %v", err)
+						req.Reply(false, nil)
+						continue
+					}
+
+					// Register tunnel atomically (checks capacity + duplicates)
+					tun, err := s.RegisterTunnel(sub, listener, fwdReq.BindAddr, fwdReq.BindPort, clientIP)
+					if err != nil {
+						log.Printf("Failed to register tunnel %s: %v", sub, err)
+						listener.Close()
+						req.Reply(false, nil)
+						continue
+					}
 					tun.SetSSHConn(sshConn)
-					close(tunnelRegistered)
+
+					entries = append(entries, &tunnelEntry{
+						sub:      sub,
+						listener: listener,
+						tun:      tun,
+					})
+
+					// Signal that the first tunnel is ready and start batch timer
+					if len(entries) == 1 {
+						close(firstTunnelRegistered)
+					}
+					// Reset batch timer on every new port to collect them all
+					batchTimer = time.After(100 * time.Millisecond)
+
 					req.Reply(true, nil)
 				case "cancel-tcpip-forward":
 					req.Reply(true, nil)
 				default:
 					req.Reply(false, nil)
 				}
+			case <-batchTimer:
+				// All ports collected — hand entries to main goroutine
+				return
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 
+	// entries is set once by drainEntries and read by the cleanup defer and normal flow.
+	var entries []*tunnelEntry
+	drainEntries := func() {
+		if entries == nil {
+			cancel() // ensure request handler goroutine exits
+			entries = <-entriesCh
+		}
+	}
+
+	// Cleanup any registered tunnels when the request handler finishes.
+	// This defer must be registered before the early-return timeout below
+	// so that tunnels are cleaned up even if no tcpip-forward arrives in time.
+	defer func() {
+		drainEntries()
+		for _, entry := range entries {
+			s.RemoveTunnel(entry.sub)
+		}
+	}()
+
+	// Wait for at least one tunnel to be registered
 	select {
-	case <-tunnelRegistered:
+	case <-firstTunnelRegistered:
 	case <-time.After(30 * time.Second):
 		log.Printf("Timeout waiting for tcpip-forward request from %s", sshConn.RemoteAddr())
 		return
 	}
 
-	defer s.RemoveTunnel(sub)
+	// Wait for request handler to finish collecting all ports
+	drainEntries()
 
-	url := fmt.Sprintf("https://%s.%s", sub, s.domain)
-	expiresAt := tun.CreatedAt.Add(config.MaxTunnelLifetime).Format("Jan 02, 2006 at 15:04 MST")
-	expiresLine := fmt.Sprintf("%s (or %s idle)", expiresAt, formatDuration(config.InactivityTimeout))
+	banner := s.buildBanner(entries)
 
-	// ANSI color codes
-	const (
-		reset     = "\033[0m"
-		gray      = "\033[38;5;245m"
-		boldGreen = "\033[1;32m"
-		purple    = "\033[38;5;141m"
-	)
-
-	urlMessage := "\r\n" +
-		gray + "Connected to " + s.domain + "." + reset + "\r\n" +
-		boldGreen + "Tunnel is live!" + reset + "\r\n" +
-		gray + "Public URL: " + purple + url + reset + "\r\n" +
-		gray + "Expires:    " + expiresLine + reset + "\r\n\r\n"
-
-	// Inactivity checker
+	// Inactivity checker: close connection when all tunnels have expired
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				if tun.IsExpired() {
-					log.Printf("Tunnel %s expired due to inactivity", sub)
+				if allTunnelsExpired(entries) {
+					log.Printf("All tunnels for %s expired due to inactivity", baseSub)
 					sshConn.Close()
 					return
 				}
@@ -200,23 +263,28 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		return
 	}
 
-	fmt.Fprint(channel, urlMessage)
+	fmt.Fprint(channel, banner)
 
+	// Shared request logger for all tunnels
 	logger := tunnel.NewRequestLogger(channel, config.LogBufferSize)
-	tun.SetLogger(logger)
+	for _, entry := range entries {
+		entry.tun.SetLogger(logger)
+	}
 	defer logger.Close()
 
-	// Accept connections on the tunnel listener
-	go func() {
-		for {
-			tcpConn, err := tunnelListener.Accept()
-			if err != nil {
-				return
+	// Start an accept loop for each tunnel's listener
+	for _, entry := range entries {
+		go func() {
+			for {
+				tcpConn, err := entry.listener.Accept()
+				if err != nil {
+					return
+				}
+				entry.tun.Touch()
+				go s.forwardToSSH(sshConn, tcpConn, entry.tun)
 			}
-			tun.Touch()
-			go s.forwardToSSH(sshConn, tcpConn, tun)
-		}
-	}()
+		}()
+	}
 
 	// Handle session requests
 	go func(ch ssh.Channel, reqs <-chan *ssh.Request) {
@@ -253,11 +321,41 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		}
 	}
 
-	log.Printf("SSH connection closed for subdomain: %s", sub)
+	log.Printf("SSH connection closed for subdomain: %s", baseSub)
 }
 
-// sendErrorAndClose sends an error message to the client and closes the connection
-// This is used when the connection is rejected after SSH handshake (e.g., IP blocked)
+// buildBanner constructs the SSH terminal banner showing tunnel URL(s) and expiry.
+func (s *Server) buildBanner(entries []*tunnelEntry) string {
+	firstTun := entries[0].tun
+	expiresAt := firstTun.CreatedAt.Add(config.MaxTunnelLifetime).Format("Jan 02, 2006 at 15:04 MST")
+	expiresLine := fmt.Sprintf("%s (or %s idle)", expiresAt, formatDuration(config.InactivityTimeout))
+
+	heading := "Tunnel is live!"
+	if len(entries) > 1 {
+		heading = "Tunnels are live!"
+	}
+
+	msg := "\r\n" +
+		ansiGray + "Connected to " + s.domain + "." + ansiReset + "\r\n" +
+		ansiBoldGreen + heading + ansiReset + "\r\n"
+
+	if len(entries) == 1 {
+		url := fmt.Sprintf("https://%s.%s", entries[0].sub, s.domain)
+		msg += ansiGray + "Public URL: " + ansiPurple + url + ansiReset + "\r\n"
+	} else {
+		for _, entry := range entries {
+			url := fmt.Sprintf("https://%s.%s", entry.sub, s.domain)
+			portLabel := fmt.Sprintf(":%-5d", entry.tun.BindPort)
+			msg += ansiGray + "  " + portLabel + " \u2192 " + ansiPurple + url + ansiReset + "\r\n"
+		}
+	}
+
+	msg += ansiGray + "Expires:    " + expiresLine + ansiReset + "\r\n\r\n"
+	return msg
+}
+
+// sendErrorAndClose sends an error message to the client and closes the connection.
+// This is used when the connection is rejected after SSH handshake (e.g., IP blocked).
 func (s *Server) sendErrorAndClose(sshConn *ssh.ServerConn, chans <-chan ssh.NewChannel, errMsg string) {
 	// Wait for session channel with short timeout
 	select {
@@ -297,14 +395,11 @@ func (s *Server) sendErrorAndClose(sshConn *ssh.ServerConn, chans <-chan ssh.New
 func (s *Server) forwardToSSH(sshConn *ssh.ServerConn, tcpConn net.Conn, tun *tunnel.Tunnel) {
 	defer tcpConn.Close()
 
-	var originAddr string
+	originAddr := "0.0.0.0"
 	var originPort uint32
 	if tcpAddr, ok := tcpConn.RemoteAddr().(*net.TCPAddr); ok {
 		originAddr = tcpAddr.IP.String()
 		originPort = uint32(tcpAddr.Port)
-	} else {
-		originAddr = "0.0.0.0"
-		originPort = 0
 	}
 
 	channel, reqs, err := sshConn.OpenChannel("forwarded-tcpip", ssh.Marshal(&forwardedTCPPayload{
@@ -336,7 +431,16 @@ func (s *Server) forwardToSSH(sshConn *ssh.ServerConn, tcpConn net.Conn, tun *tu
 	<-done
 }
 
-// formatDuration formats a duration as a human-readable string (e.g., "2h", "45m")
+func allTunnelsExpired(entries []*tunnelEntry) bool {
+	for _, entry := range entries {
+		if !entry.tun.IsExpired() {
+			return false
+		}
+	}
+	return true
+}
+
+// formatDuration formats a duration as a human-readable string (e.g., "2h", "45m").
 func formatDuration(d time.Duration) string {
 	if d >= time.Hour {
 		h := int(d.Hours())

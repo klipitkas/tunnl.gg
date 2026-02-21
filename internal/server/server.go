@@ -170,14 +170,22 @@ func (s *Server) DecrementIPConnection(clientIP string) {
 	s.mu.Unlock()
 }
 
-// RegisterTunnel registers a new tunnel
-func (s *Server) RegisterTunnel(sub string, listener net.Listener, bindAddr string, bindPort uint32, clientIP string) *tunnel.Tunnel {
+// RegisterTunnel atomically checks capacity, checks for duplicates, and registers a new tunnel.
+// Returns an error if the server is at capacity or the subdomain is already taken.
+func (s *Server) RegisterTunnel(sub string, listener net.Listener, bindAddr string, bindPort uint32, clientIP string) (*tunnel.Tunnel, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if len(s.tunnels) >= config.MaxTotalTunnels {
+		return nil, fmt.Errorf("server capacity reached: max %d total tunnels", config.MaxTotalTunnels)
+	}
+	if _, exists := s.tunnels[sub]; exists {
+		return nil, fmt.Errorf("subdomain %s already registered", sub)
+	}
+
 	t := tunnel.New(sub, listener, bindAddr, bindPort, clientIP)
 	s.tunnels[sub] = t
-	return t
+	return t, nil
 }
 
 // RemoveTunnel removes and closes a tunnel
