@@ -60,12 +60,16 @@ tunnl.gg/
     │   ├── ssh.go              # SSH connection handling, port forwarding
     │   ├── http.go             # HTTP/HTTPS handlers, reverse proxy, WebSocket
     │   ├── stats.go            # Statistics tracking and endpoint
-    │   └── abuse.go            # Abuse tracking, IP blocking, connection rate limiting
+    │   ├── abuse.go            # Abuse tracking, IP blocking, connection rate limiting
+    │   ├── connlimit.go        # Concurrent limits (WebSockets, in-flight requests, SSH handshakes)
+    │   └── deadlines.go        # Idle timeouts replacing fixed read/write timeouts for proxied requests
     ├── subdomain/
     │   └── subdomain.go        # Memorable subdomain generation and validation
     └── tunnel/
         ├── tunnel.go           # Tunnel struct with activity tracking
-        └── ratelimiter.go      # Token bucket rate limiter
+        ├── channel.go          # forwarded-tcpip channels to the client, as net.Conn
+        ├── ratelimiter.go      # Token bucket rate limiters (per tunnel and per visitor)
+        └── requestlogger.go    # Request log streamed to the SSH session
 ```
 
 ## Components

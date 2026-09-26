@@ -59,12 +59,17 @@ tunnl.gg/
 │   │   ├── ssh.go          # SSH connection handling
 │   │   ├── http.go         # HTTP/HTTPS handlers
 │   │   ├── stats.go        # Stats tracking and endpoint
-│   │   └── abuse.go        # Abuse tracking and IP blocking
+│   │   ├── abuse.go        # Abuse tracking and IP blocking
+│   │   ├── connlimit.go    # Concurrent connection limits
+│   │   └── deadlines.go    # Idle timeouts for proxied requests
 │   ├── subdomain/          # Subdomain generation/validation
 │   │   └── subdomain.go
-│   └── tunnel/             # Tunnel and rate limiter
+│   └── tunnel/             # Tunnel, SSH channels, and rate limiter
 │       ├── tunnel.go
-│       └── ratelimiter.go
+│       ├── channel.go
+│       ├── ratelimiter.go
+│       └── requestlogger.go
+├── .golangci.yml           # Linter configuration
 ├── Dockerfile              # Multi-stage build (scratch image)
 ├── docker-compose.yml      # Production deployment
 └── Makefile                # Build commands
