@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"tunnl.gg/internal/config"
 )
 
 // pipeChannel is an ssh.Channel backed by one end of a net.Pipe.
@@ -167,5 +169,46 @@ func TestOrigin(t *testing.T) {
 				t.Errorf("origin(%q) = %s:%d, want %s:%d", tt.addr, addr, port, tt.wantAddr, tt.wantPort)
 			}
 		})
+	}
+}
+
+func TestDial_FailsFastWhenOpensUnanswered(t *testing.T) {
+	opener := &fakeOpener{release: make(chan struct{})}
+	tun := New("happy-tiger-00000001", opener, "localhost", 8080, "192.0.2.1")
+
+	// Fill every slot with opens the client never answers
+	var wg sync.WaitGroup
+	for i := 0; i < config.MaxPendingChannelOpens; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			tun.Dial(ctx)
+		}()
+	}
+	wg.Wait()
+
+	start := time.Now()
+	if _, err := tun.Dial(context.Background()); !errors.Is(err, ErrTooManyPendingOpens) {
+		t.Fatalf("Dial() error = %v, want ErrTooManyPendingOpens", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("Dial() took %v with all slots taken, want an immediate failure", elapsed)
+	}
+
+	// Once the client answers, the slots are freed
+	close(opener.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		conn, err := tun.Dial(context.Background())
+		if err == nil {
+			conn.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Dial() still failing after the client answered: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

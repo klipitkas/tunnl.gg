@@ -67,6 +67,10 @@ const (
 	MaxWebSocketsPerTunnel  = 100                // concurrent WebSockets per tunnel
 	MaxWebSocketsPerVisitor = 20                 // concurrent WebSockets per visitor IP across all tunnels
 
+	// Channel opens to a tunnel client that it hasn't answered yet. Past this,
+	// requests to the tunnel fail until the client answers or disconnects.
+	MaxPendingChannelOpens = 32
+
 	// Request logging
 	LogBufferSize = 128 // buffered channel size for SSH terminal request logs
 

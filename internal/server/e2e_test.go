@@ -635,3 +635,86 @@ func TestE2E_WebSocketForwardedHeaders(t *testing.T) {
 		t.Errorf("app saw %q on the upgrade, want %q", got, want)
 	}
 }
+
+func TestE2E_UnansweredChannelOpensAreBounded(t *testing.T) {
+	srv, addr := startSSHServer(t)
+	client, err := dialSSH(addr)
+	if err != nil {
+		t.Fatalf("ssh.Dial() error: %v", err)
+	}
+
+	// A malicious client: registers a tunnel but never answers channel opens
+	var mu sync.Mutex
+	var held []ssh.NewChannel
+	opens := client.HandleChannelOpen("forwarded-tcpip")
+	go func() {
+		for nc := range opens {
+			mu.Lock()
+			held = append(held, nc)
+			mu.Unlock()
+		}
+	}()
+	pending := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(held)
+	}
+	if ok, _, err := client.SendRequest("tcpip-forward", true, ssh.Marshal(&tcpipForwardRequest{BindAddr: "0.0.0.0", BindPort: 80})); err != nil || !ok {
+		t.Fatalf("tcpip-forward: ok=%v err=%v", ok, err)
+	}
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession() error: %v", err)
+	}
+	stdin, _ := session.StdinPipe()
+	defer stdin.Close()
+	stdout, _ := session.StdoutPipe()
+	session.RequestPty("xterm", 24, 80, ssh.TerminalModes{})
+	session.Shell()
+	output := &syncBuffer{}
+	go io.Copy(output, stdout)
+	var sub string
+	waitFor(t, "tunnel banner", func() bool {
+		if m := publicURLPattern.FindStringSubmatch(output.String()); m != nil {
+			sub = m[1]
+		}
+		return sub != ""
+	})
+
+	request := func() int {
+		req := httptest.NewRequest(http.MethodGet, "https://"+sub+"."+config.DefaultDomain+"/", nil)
+		req.RemoteAddr = "198.51.100.1:1234"
+		req.Header.Set("User-Agent", "curl/8.0")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Take every slot with requests whose channel opens go unanswered
+	var wg sync.WaitGroup
+	for i := 0; i < config.MaxPendingChannelOpens; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			request()
+		}()
+	}
+	waitFor(t, "all channel opens to reach the client", func() bool {
+		return pending() == config.MaxPendingChannelOpens
+	})
+
+	start := time.Now()
+	if code := request(); code != http.StatusBadGateway {
+		t.Errorf("request over the pending limit: status %d, want %d", code, http.StatusBadGateway)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("request over the pending limit took %v, want an immediate failure", elapsed)
+	}
+	if got := pending(); got != config.MaxPendingChannelOpens {
+		t.Errorf("client received %d channel opens, want at most %d", got, config.MaxPendingChannelOpens)
+	}
+
+	// Disconnecting releases everything
+	client.Close()
+	wg.Wait()
+}

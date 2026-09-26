@@ -120,7 +120,8 @@ Listens on port 443 with pre-configured TLS certificates.
 5. Mark the request in flight (the tunnel can't go idle until it finishes)
 6. Show interstitial warning for browser requests (first visit)
 7. Handle WebSocket upgrade if requested
-8. Reverse proxy request to the client over a new `forwarded-tcpip` SSH channel (no local listener or socket)
+8. Reverse proxy request to the client over a new `forwarded-tcpip` SSH channel (no local listener or socket).
+   At most 32 channel opens per tunnel can await the client's answer; further requests fail fast with 502.
 10. SSH client forwards to local application
 
 ### 4. Stats Server (`internal/server/stats.go`)

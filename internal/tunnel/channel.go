@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strconv"
 	"sync"
@@ -27,6 +28,10 @@ type forwardedTCPPayload struct {
 
 // dialTimeout bounds how long opening a channel to the client may take.
 const dialTimeout = 10 * time.Second
+
+// ErrTooManyPendingOpens is returned by Dial when the client has not yet
+// answered MaxPendingChannelOpens earlier channel opens.
+var ErrTooManyPendingOpens = errors.New("tunnel: too many unanswered channel opens")
 
 type originKey struct{}
 
@@ -55,7 +60,18 @@ func origin(ctx context.Context) (string, uint32) {
 // "forwarded-tcpip" channel. Use WithOrigin to report the visitor as the
 // channel's origin; pooled HTTP connections report the visitor whose request
 // opened them.
+//
+// OpenChannel waits for the client's answer with no timeout, so an open the
+// client never answers stays pending until the SSH connection closes. Each
+// pending open holds a slot, and Dial fails fast once all are taken, so a
+// client that ignores opens can't make the server accumulate goroutines.
 func (t *Tunnel) Dial(ctx context.Context) (net.Conn, error) {
+	select {
+	case t.pendingOpens <- struct{}{}:
+	default:
+		return nil, ErrTooManyPendingOpens
+	}
+
 	originAddr, originPort := origin(ctx)
 	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
@@ -75,6 +91,7 @@ func (t *Tunnel) Dial(ctx context.Context) (net.Conn, error) {
 	done := make(chan result, 1)
 	go func() {
 		ch, reqs, err := t.opener.OpenChannel("forwarded-tcpip", payload)
+		<-t.pendingOpens // the client answered, or the connection closed
 		done <- result{ch, reqs, err}
 	}()
 

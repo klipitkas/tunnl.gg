@@ -24,6 +24,7 @@ type Tunnel struct {
 	rateLimiter    *RateLimiter      // Tunnel-wide rate limit across all visitors
 	visitorLimiter *KeyedRateLimiter // Per-visitor rate limit
 	transport      *http.Transport   // Reusable HTTP transport for proxying
+	pendingOpens   chan struct{}     // slots for channel opens awaiting the client's answer
 	logger         *RequestLogger    // Async request logger for SSH terminal output
 }
 
@@ -31,14 +32,15 @@ type Tunnel struct {
 func New(subdomain string, opener ChannelOpener, bindAddr string, bindPort uint32, clientIP string) *Tunnel {
 	now := time.Now()
 	t := &Tunnel{
-		Subdomain:   subdomain,
-		opener:      opener,
-		CreatedAt:   now,
-		LastActive:  now,
-		BindAddr:    bindAddr,
-		BindPort:    bindPort,
-		ClientIP:    clientIP,
-		rateLimiter: NewRateLimiter(config.RequestsPerSecond, config.BurstSize),
+		Subdomain:    subdomain,
+		opener:       opener,
+		CreatedAt:    now,
+		LastActive:   now,
+		BindAddr:     bindAddr,
+		BindPort:     bindPort,
+		ClientIP:     clientIP,
+		rateLimiter:  NewRateLimiter(config.RequestsPerSecond, config.BurstSize),
+		pendingOpens: make(chan struct{}, config.MaxPendingChannelOpens),
 		visitorLimiter: NewKeyedRateLimiter(
 			config.VisitorRequestsPerSecond,
 			config.VisitorBurstSize,
