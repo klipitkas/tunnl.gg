@@ -9,13 +9,13 @@ services:
       - "80:80"      # HTTP (ACME + redirect)
       - "443:443"    # HTTPS tunnel traffic
     volumes:
-      - ./data/host_key:/host_key
+      - ./data/hostkey:/hostkey # SSH host key, generated on first start
       - ./data/certs:/certs:ro
     environment:
       - SSH_ADDR=:22
       - HTTP_ADDR=:80
       - HTTPS_ADDR=:443
-      - HOST_KEY_PATH=/host_key
+      - HOST_KEY_PATH=/hostkey/host_key
       - TLS_CERT=/certs/fullchain.pem
       - TLS_KEY=/certs/privkey.pem
     cap_drop:
@@ -39,13 +39,13 @@ services:
       - "8080:80"     # HTTP
       - "8443:443"    # HTTPS
     volumes:
-      - ./data-dev/host_key:/host_key
+      - ./data-dev/hostkey:/hostkey # SSH host key, generated on first start
       - ./data-dev/certs:/certs:ro
     environment:
       - SSH_ADDR=:22
       - HTTP_ADDR=:80
       - HTTPS_ADDR=:443
-      - HOST_KEY_PATH=/host_key
+      - HOST_KEY_PATH=/hostkey/host_key
       - TLS_CERT=/certs/fullchain.pem
       - TLS_KEY=/certs/privkey.pem
     cap_drop:

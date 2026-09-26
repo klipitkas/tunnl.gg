@@ -103,12 +103,15 @@ git clone https://github.com/klipitkas/tunnl.gg.git
 cd tunnl.gg
 
 # Create data directories
-mkdir -p data/certs
+mkdir -p data/certs data/hostkey
 
 # Copy certificates
 sudo cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem data/certs/
 sudo cp /etc/letsencrypt/live/yourdomain.com/privkey.pem data/certs/
-sudo chown -R $USER:$USER data/certs
+
+# The container runs as UID 65534: let it read the certificates and
+# store the SSH host key it generates on first start
+sudo chown -R 65534:65534 data/certs data/hostkey
 
 # Start the service
 docker compose up -d

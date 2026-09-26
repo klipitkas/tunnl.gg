@@ -1,5 +1,5 @@
-# Build stage
-FROM golang:1.26-alpine AS builder
+# Build stage (pinned by digest; update the tag and digest together)
+FROM golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c AS builder
 
 WORKDIR /app
 
@@ -13,9 +13,13 @@ RUN go mod download
 # Copy source code
 COPY . .
 
+# Version info logged at startup
+ARG VERSION=dev
+ARG COMMIT=unknown
+
 # Build with optimizations
 RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
     -trimpath \
     -o tunnl \
     ./cmd/tunnl
