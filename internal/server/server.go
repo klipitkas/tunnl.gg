@@ -34,6 +34,8 @@ type Server struct {
 
 	// Abuse protection
 	abuseTracker *AbuseTracker
+	wsPerTunnel  *connLimiter // concurrent WebSockets keyed by subdomain
+	wsPerVisitor *connLimiter // concurrent WebSockets keyed by visitor IP
 }
 
 // New creates a new server instance
@@ -43,6 +45,8 @@ func New(hostKeyPath string, domain string) (*Server, error) {
 		ipConnections: make(map[string]int),
 		sshConns:      make(map[string][]*ssh.ServerConn),
 		abuseTracker:  NewAbuseTracker(),
+		wsPerTunnel:   newConnLimiter(config.MaxWebSocketsPerTunnel),
+		wsPerVisitor:  newConnLimiter(config.MaxWebSocketsPerVisitor),
 		domain:        domain,
 	}
 

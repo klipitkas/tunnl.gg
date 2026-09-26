@@ -31,6 +31,8 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 | Response body size | 128 MB | Max response size |
 | WebSocket transfer | 1 GB per direction | Max data per WebSocket connection |
 | WebSocket idle timeout | 2 hours | WebSocket closed after inactivity |
+| WebSockets per tunnel | 100 | Max concurrent WebSockets per tunnel |
+| WebSockets per visitor | 20 | Max concurrent WebSockets per visitor IP across all tunnels |
 | SSH handshake timeout | 30 seconds | Max time for SSH handshake to complete |
 | Connections per minute | 10 | New SSH connections per IP |
 | Inactivity timeout | 2 hours | Tunnel closes after 2 hours with no requests or open WebSockets |
@@ -256,6 +258,7 @@ Response:
   "blocked_ips": 1,
   "total_blocked": 5,
   "total_rate_limited": 23,
+  "active_websockets": 4,
   "subdomains": ["happy-tiger-a1b2c3d4", "calm-eagle-e5f6a7b8", "swift-wolf-d9e0f1a2"]
 }
 ```

@@ -176,6 +176,16 @@ func (tt *testTunnel) get(t *testing.T, path string) *http.Response {
 // a WebSocket upgrade handshake for path.
 func (tt *testTunnel) dialWebSocket(t *testing.T, path string) (net.Conn, *bufio.Reader) {
 	t.Helper()
+	conn, br, status := tt.tryWebSocket(t, path)
+	if status != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade status = %d, want %d", status, http.StatusSwitchingProtocols)
+	}
+	return conn, br
+}
+
+// tryWebSocket attempts a WebSocket upgrade for path and returns the response status.
+func (tt *testTunnel) tryWebSocket(t *testing.T, path string) (net.Conn, *bufio.Reader, int) {
+	t.Helper()
 	conn, err := net.Dial("tcp", tt.public.Listener.Addr().String())
 	if err != nil {
 		t.Fatalf("Dial() error: %v", err)
@@ -190,10 +200,7 @@ func (tt *testTunnel) dialWebSocket(t *testing.T, path string) (net.Conn, *bufio
 	if err != nil {
 		t.Fatalf("ReadResponse() error: %v", err)
 	}
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		t.Fatalf("upgrade status = %d, want %d", resp.StatusCode, http.StatusSwitchingProtocols)
-	}
-	return conn, br
+	return conn, br, resp.StatusCode
 }
 
 // echoWebSocketBackend completes the upgrade and echoes every byte back.
@@ -300,4 +307,28 @@ func TestE2E_WebSocketDataSentWithUpgradeRequest(t *testing.T) {
 	if string(got) != "ping" {
 		t.Errorf("echo = %q, want %q", got, "ping")
 	}
+}
+
+func TestE2E_WebSocketLimitPerVisitor(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(echoWebSocketBackend))
+
+	conns := make([]net.Conn, 0, config.MaxWebSocketsPerVisitor)
+	for i := 0; i < config.MaxWebSocketsPerVisitor; i++ {
+		conn, _ := tt.dialWebSocket(t, "/ws")
+		conns = append(conns, conn)
+	}
+	if got := tt.srv.GetStats(false).ActiveWebSockets; got != config.MaxWebSocketsPerVisitor {
+		t.Errorf("active_websockets = %d, want %d", got, config.MaxWebSocketsPerVisitor)
+	}
+
+	if _, _, status := tt.tryWebSocket(t, "/ws"); status != http.StatusTooManyRequests {
+		t.Fatalf("upgrade over the limit: status = %d, want %d", status, http.StatusTooManyRequests)
+	}
+
+	// Closing a WebSocket frees its slot
+	conns[0].Close()
+	waitFor(t, "WebSocket slot to be released", func() bool {
+		return tt.srv.GetStats(false).ActiveWebSockets == config.MaxWebSocketsPerVisitor-1
+	})
+	tt.dialWebSocket(t, "/ws")
 }

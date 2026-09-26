@@ -15,6 +15,7 @@ type Stats struct {
 	TotalConnections uint64   `json:"total_connections"`
 	TotalRequests    uint64   `json:"total_requests"`
 	Subdomains       []string `json:"subdomains,omitempty"`
+	ActiveWebSockets int      `json:"active_websockets"`
 
 	// Abuse protection stats
 	BlockedIPs       int    `json:"blocked_ips"`
@@ -44,6 +45,7 @@ func (s *Server) GetStats(includeSubdomains bool) Stats {
 		UniqueIPs:        len(s.ipConnections),
 		TotalConnections: atomic.LoadUint64(&s.totalConnections),
 		TotalRequests:    atomic.LoadUint64(&s.totalRequests),
+		ActiveWebSockets: s.wsPerTunnel.total(),
 		BlockedIPs:       blockedIPs,
 		TotalBlocked:     totalBlocked,
 		TotalRateLimited: totalRateLimited,

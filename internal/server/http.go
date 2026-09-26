@@ -55,7 +55,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Throttle only the visitor: the tunnel owner doesn't control who sends
 	// traffic to their URL, so exceeding the limit must not affect the tunnel.
-	if !tun.AllowRequest(visitorKey(r.RemoteAddr)) {
+	visitor := visitorKey(r.RemoteAddr)
+	if !tun.AllowRequest(visitor) {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
@@ -73,6 +74,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isWebSocketRequest(r) {
+		// Upgraded connections are long-lived, so cap how many are open at once
+		if !s.wsPerVisitor.acquire(visitor) {
+			http.Error(w, "Too Many WebSocket Connections", http.StatusTooManyRequests)
+			return
+		}
+		defer s.wsPerVisitor.release(visitor)
+		if !s.wsPerTunnel.acquire(sub) {
+			http.Error(w, "Too Many WebSocket Connections", http.StatusTooManyRequests)
+			return
+		}
+		defer s.wsPerTunnel.release(sub)
+
 		s.handleWebSocket(w, r, tun, sub)
 		return
 	}

@@ -140,6 +140,7 @@ Listens on `127.0.0.1:9090` (localhost only) and exposes metrics.
   "blocked_ips": 1,
   "total_blocked": 5,
   "total_rate_limited": 23,
+  "active_websockets": 4,
   "subdomains": ["happy-tiger-a1b2c3d4", "calm-eagle-e5f6a7b8"]
 }
 ```
@@ -322,6 +323,7 @@ Browser                    Server                         Client
 9. **WebSocket Limits**:
    - Max transfer: 1 GB per direction per connection (client can reconnect)
    - Idle timeout: 2 hours (per-read deadline reset)
+   - Max concurrent: 100 per tunnel, 20 per visitor IP across all tunnels (excess gets 429)
 
 10. **Tunnel Lifetime**:
     - Inactivity timeout: 2 hours

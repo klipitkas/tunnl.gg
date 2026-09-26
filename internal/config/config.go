@@ -55,8 +55,10 @@ const (
 	ShutdownTimeout        = 10 * time.Second
 
 	// WebSocket limits
-	WebSocketIdleTimeout = 2 * time.Hour
-	MaxWebSocketTransfer = 1024 * 1024 * 1024 // 1GB
+	WebSocketIdleTimeout    = 2 * time.Hour
+	MaxWebSocketTransfer    = 1024 * 1024 * 1024 // 1GB
+	MaxWebSocketsPerTunnel  = 100                // concurrent WebSockets per tunnel
+	MaxWebSocketsPerVisitor = 20                 // concurrent WebSockets per visitor IP across all tunnels
 
 	// Request logging
 	LogBufferSize = 128 // buffered channel size for SSH terminal request logs
