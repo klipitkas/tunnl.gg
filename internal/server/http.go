@@ -197,7 +197,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 		backendBytes, _ = copyWithLimits(backendConn, clientConn, config.MaxWebSocketTransfer, config.WebSocketIdleTimeout)
 		// Signal backend we're done sending
 		if cw, ok := backendConn.(interface{ CloseWrite() error }); ok {
-			cw.CloseWrite()
+			_ = cw.CloseWrite()
 		}
 	}()
 	go func() {

@@ -155,7 +155,6 @@ func (at *AbuseTracker) CheckConnectionRate(ip string) bool {
 	return true
 }
 
-
 // GetStats returns abuse tracking statistics
 func (at *AbuseTracker) GetStats() (blockedIPs int, totalBlocked uint64, totalRateLimited uint64) {
 	at.mu.RLock()

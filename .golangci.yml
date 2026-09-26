@@ -1,0 +1,37 @@
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      # Best-effort network cleanup and signaling: the connection is being torn
+      # down or the peer is gone, and there is nothing useful to do on error.
+      exclude-functions:
+        - (io.Closer).Close
+        - (net.Conn).Close
+        - (net.Listener).Close
+        - (net.Conn).SetDeadline
+        - (net.Conn).SetReadDeadline
+        - (net.Conn).SetWriteDeadline
+        - (*net.TCPConn).SetNoDelay
+        - (*net.TCPConn).CloseWrite
+        - (golang.org/x/crypto/ssh.Conn).Close
+        - (golang.org/x/crypto/ssh.Channel).Close
+        - (golang.org/x/crypto/ssh.Channel).CloseWrite
+        - (*golang.org/x/crypto/ssh.Request).Reply
+        - (golang.org/x/crypto/ssh.NewChannel).Reject
+        # Writes to an SSH session: a failed write means the session is closing
+        - fmt.Fprint
+        - fmt.Fprintf
+        - (io.Writer).Write
+
+  exclusions:
+    rules:
+      # Tests ignore errors from setup writes and cleanup; failures surface
+      # through the assertions that follow.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

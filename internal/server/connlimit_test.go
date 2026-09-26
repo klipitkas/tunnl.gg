@@ -5,8 +5,10 @@ import "testing"
 func TestConnLimiter(t *testing.T) {
 	c := newConnLimiter(2)
 
-	if !c.acquire("a") || !c.acquire("a") {
-		t.Fatal("acquire() should succeed up to the limit")
+	for i := 0; i < 2; i++ {
+		if !c.acquire("a") {
+			t.Fatalf("acquire() #%d should succeed up to the limit", i+1)
+		}
 	}
 	if c.acquire("a") {
 		t.Error("acquire() should fail at the limit")

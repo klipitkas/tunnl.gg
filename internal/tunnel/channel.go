@@ -120,7 +120,9 @@ func (c *channelConn) LocalAddr() net.Addr  { return c.addr }
 func (c *channelConn) RemoteAddr() net.Addr { return c.addr }
 
 func (c *channelConn) SetDeadline(t time.Time) error {
-	c.SetReadDeadline(t)
+	if err := c.SetReadDeadline(t); err != nil {
+		return err
+	}
 	return c.SetWriteDeadline(t)
 }
 
