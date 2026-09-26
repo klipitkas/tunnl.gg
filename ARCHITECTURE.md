@@ -2,7 +2,7 @@
 
 ## Overview
 
-Tunnl.gg is a minimal SSH tunneling service that exposes local applications to the internet via random subdomains with automatic SSL.
+Tunnl.gg is a minimal SSH tunneling service that exposes local applications to the internet on their own subdomains over HTTPS.
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -301,7 +301,7 @@ Browser                    Server                         Client
 
 1. **No SSH Authentication**: Anyone can create tunnels. This is intentional for a free service.
 
-2. **Subdomain Isolation**: Each tunnel gets a random subdomain, making enumeration impractical (~67M combinations).
+2. **Subdomain Isolation**: Each tunnel gets an unguessable subdomain, random or keyed from the client's SSH key, making enumeration impractical (~4.4 trillion combinations).
 
 3. **Subdomain Validation**: Strict whitelist-based validation prevents injection attacks.
 
