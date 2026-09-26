@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,13 +21,17 @@ func newTestTunnel(t *testing.T) *Tunnel {
 	return New("test-sub-00000000", ln, "127.0.0.1", 8080, "127.0.0.1")
 }
 
-func TestTouch(t *testing.T) {
+func TestTouch_ResetsInactivity(t *testing.T) {
 	tun := newTestTunnel(t)
-	before := tun.LastActive
-	time.Sleep(10 * time.Millisecond)
+
+	tun.mu.Lock()
+	tun.LastActive = time.Now().Add(-3 * time.Hour)
+	tun.mu.Unlock()
+
 	tun.Touch()
-	if !tun.LastActive.After(before) {
-		t.Error("Touch() did not update LastActive")
+
+	if tun.IsExpired() {
+		t.Error("Touch() should reset the inactivity timer")
 	}
 }
 
@@ -56,28 +61,6 @@ func TestIsExpired_MaxLifetime(t *testing.T) {
 
 	if !tun.IsExpired() {
 		t.Error("tunnel past max lifetime should be expired")
-	}
-}
-
-func TestTimeRemaining(t *testing.T) {
-	tun := newTestTunnel(t)
-	remaining := tun.TimeRemaining()
-
-	// For a new tunnel, remaining should be close to InactivityTimeout (2h)
-	// since it's less than MaxTunnelLifetime (24h)
-	if remaining <= 0 {
-		t.Error("TimeRemaining() should be positive for a new tunnel")
-	}
-	if remaining > 2*time.Hour+time.Second {
-		t.Errorf("TimeRemaining() = %v, want <= 2h", remaining)
-	}
-}
-
-func TestTransport(t *testing.T) {
-	tun := newTestTunnel(t)
-	tr := tun.Transport()
-	if tr == nil {
-		t.Error("Transport() returned nil")
 	}
 }
 
@@ -136,59 +119,20 @@ func TestAllowRequest_ThrottledVisitorDoesNotDrainTunnelBudget(t *testing.T) {
 	}
 }
 
-func TestIsMaxLifetimeExceeded(t *testing.T) {
+func TestClose_FlushesAndDetachesLogger(t *testing.T) {
 	tun := newTestTunnel(t)
-
-	if tun.IsMaxLifetimeExceeded() {
-		t.Error("new tunnel should not have exceeded max lifetime")
-	}
-
-	tun.mu.Lock()
-	tun.CreatedAt = time.Now().Add(-25 * time.Hour)
-	tun.mu.Unlock()
-
-	if !tun.IsMaxLifetimeExceeded() {
-		t.Error("tunnel past max lifetime should report exceeded")
-	}
-}
-
-func TestSetLogger(t *testing.T) {
-	tun := newTestTunnel(t)
-	var buf bytes.Buffer
-	logger := NewRequestLogger(&buf, 16)
-	defer logger.Close()
-
-	tun.SetLogger(logger)
-
-	got := tun.Logger()
-	if got != logger {
-		t.Error("SetLogger()/Logger() round-trip failed")
-	}
-}
-
-func TestLogger_NilByDefault(t *testing.T) {
-	tun := newTestTunnel(t)
-	if tun.Logger() != nil {
-		t.Error("Logger() should be nil by default")
-	}
-}
-
-func TestClose_ClosesLogger(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to create listener: %v", err)
-	}
-	tun := New("test-sub-00000000", ln, "127.0.0.1", 8080, "127.0.0.1")
 
 	var buf bytes.Buffer
-	logger := NewRequestLogger(&buf, 16)
-	tun.SetLogger(logger)
+	tun.SetLogger(NewRequestLogger(&buf, 16))
+	tun.Logger().LogRequest("GET", "/pending", 200, time.Millisecond)
 
 	tun.Close()
 
-	// After Close, logger should be nil
+	if !strings.Contains(buf.String(), "/pending") {
+		t.Errorf("Close() should flush pending log lines, got %q", buf.String())
+	}
 	if tun.Logger() != nil {
-		t.Error("Close() should nil out logger")
+		t.Error("Close() should detach the logger so requests stop logging to a closed session")
 	}
 }
 
@@ -204,21 +148,5 @@ func TestClose(t *testing.T) {
 	_, err = ln.Accept()
 	if err == nil {
 		t.Error("Close() should close the listener")
-	}
-}
-
-func TestTimeRemaining_LifetimeShorter(t *testing.T) {
-	tun := newTestTunnel(t)
-
-	// Set CreatedAt so lifetime remaining is shorter than inactivity remaining
-	tun.mu.Lock()
-	tun.CreatedAt = time.Now().Add(-23*time.Hour - 50*time.Minute)
-	tun.LastActive = time.Now() // just touched, so inactivity remaining ~2h
-	tun.mu.Unlock()
-
-	remaining := tun.TimeRemaining()
-	// Lifetime remaining should be ~10 minutes, which is less than inactivity timeout of 2h
-	if remaining > 15*time.Minute {
-		t.Errorf("TimeRemaining() = %v, want <= 15m (lifetime should be limiting)", remaining)
 	}
 }

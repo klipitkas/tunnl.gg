@@ -69,27 +69,6 @@ func (t *Tunnel) IsExpired() bool {
 		time.Since(t.CreatedAt) > config.MaxTunnelLifetime
 }
 
-// IsMaxLifetimeExceeded returns true if the tunnel has exceeded max lifetime
-func (t *Tunnel) IsMaxLifetimeExceeded() bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return time.Since(t.CreatedAt) > config.MaxTunnelLifetime
-}
-
-// TimeRemaining returns the time remaining before the tunnel expires (either by inactivity or max lifetime)
-func (t *Tunnel) TimeRemaining() time.Duration {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	inactivityRemaining := config.InactivityTimeout - time.Since(t.LastActive)
-	lifetimeRemaining := config.MaxTunnelLifetime - time.Since(t.CreatedAt)
-
-	if inactivityRemaining < lifetimeRemaining {
-		return inactivityRemaining
-	}
-	return lifetimeRemaining
-}
-
 // AllowRequest checks if a request from visitor is allowed by the rate limiters.
 // The visitor's own limit is checked first so a visitor who is already throttled
 // does not drain the tunnel-wide budget shared with everyone else.

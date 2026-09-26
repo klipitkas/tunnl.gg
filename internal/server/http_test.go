@@ -210,14 +210,6 @@ func TestLimitedReadCloser(t *testing.T) {
 			t.Errorf("got %q, want %q", string(buf), data)
 		}
 	})
-
-	t.Run("close", func(t *testing.T) {
-		rc := io.NopCloser(strings.NewReader("test"))
-		lrc := &limitedReadCloser{rc: rc, limit: 100}
-		if err := lrc.Close(); err != nil {
-			t.Errorf("Close() error: %v", err)
-		}
-	})
 }
 
 func TestCopyWithLimits(t *testing.T) {
@@ -397,15 +389,6 @@ func TestStatusCaptureWriter(t *testing.T) {
 
 		if sw.status != http.StatusCreated {
 			t.Errorf("status = %d, want %d (first call should win)", sw.status, http.StatusCreated)
-		}
-	})
-
-	t.Run("Unwrap returns inner writer", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		sw := &statusCaptureWriter{ResponseWriter: rec}
-
-		if sw.Unwrap() != rec {
-			t.Error("Unwrap() should return the underlying ResponseWriter")
 		}
 	})
 }

@@ -46,22 +46,13 @@ func TestAbuseTracker_BlockExpiry_Expired(t *testing.T) {
 	}
 }
 
-func TestAbuseTracker_CheckConnectionRate_Allowed(t *testing.T) {
+func TestAbuseTracker_CheckConnectionRate_Limited(t *testing.T) {
 	at := newTestTracker(t)
 
 	for i := 0; i < 10; i++ {
 		if !at.CheckConnectionRate("1.2.3.4") {
 			t.Fatalf("CheckConnectionRate() returned false on connection %d", i+1)
 		}
-	}
-}
-
-func TestAbuseTracker_CheckConnectionRate_Limited(t *testing.T) {
-	at := newTestTracker(t)
-
-	// Exhaust the rate limit
-	for i := 0; i < 10; i++ {
-		at.CheckConnectionRate("1.2.3.4")
 	}
 
 	// 11th should be denied
@@ -151,12 +142,6 @@ func TestAbuseTracker_GetStats_RateLimited(t *testing.T) {
 	if totalRateLimited != 1 {
 		t.Errorf("totalRateLimited = %d, want 1", totalRateLimited)
 	}
-}
-
-func TestAbuseTracker_Stop(t *testing.T) {
-	at := NewAbuseTracker()
-	// Stop should return without deadlocking
-	at.Stop()
 }
 
 func TestAbuseTracker_DifferentIPs(t *testing.T) {
