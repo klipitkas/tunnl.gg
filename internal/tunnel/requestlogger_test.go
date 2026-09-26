@@ -215,7 +215,7 @@ func TestFormatRequestLog_LongPath(t *testing.T) {
 
 func TestFormatRequestLog_EscapesTerminalControls(t *testing.T) {
 	out := formatRequestLog("GET", "/ok\x1b[31m\r\nspoofed\u202e", 200, time.Millisecond)
-	logLine := strings.TrimSuffix(out, "\r\n")
+	logLine := strings.TrimPrefix(strings.TrimSuffix(out, "\r\n"), "\r")
 
 	if strings.Contains(logLine, "\x1b") {
 		t.Errorf("output contains raw escape character: %q", out)
@@ -226,6 +226,18 @@ func TestFormatRequestLog_EscapesTerminalControls(t *testing.T) {
 	for _, want := range []string{`\x1b`, `\x0d`, `\x0a`, `\u202e`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing escaped sequence %q: %q", want, out)
+		}
+	}
+}
+
+func TestLogLinesStartAtLeftEdge(t *testing.T) {
+	for name, line := range map[string]string{
+		"request":  formatRequestLog("GET", "/", 200, time.Millisecond),
+		"ws open":  formatWSOpen("/ws"),
+		"ws close": formatWSClose("/ws", time.Second, 10),
+	} {
+		if !strings.HasPrefix(line, "\r") || !strings.HasSuffix(line, "\r\n") {
+			t.Errorf("%s line should start with \\r and end with \\r\\n: %q", name, line)
 		}
 	}
 }

@@ -92,16 +92,20 @@ func truncatePath(path string) string {
 	return path
 }
 
+// Log lines start with \r so they begin at the left edge even when other output
+// in the same terminal, such as a local server's own logs written with a bare
+// \n, has left the cursor partway along a line.
+
 func formatRequestLog(method, path string, status int, latency time.Duration) string {
-	return fmt.Sprintf("  %-4s %-53s %d  %s\r\n", sanitizeTerminalText(method), truncatePath(path), status, formatLatency(latency))
+	return fmt.Sprintf("\r  %-4s %-53s %d  %s\r\n", sanitizeTerminalText(method), truncatePath(path), status, formatLatency(latency))
 }
 
 func formatWSOpen(path string) string {
-	return fmt.Sprintf("  %-4s %-53s -    OPEN\r\n", "WS", truncatePath(path))
+	return fmt.Sprintf("\r  %-4s %-53s -    OPEN\r\n", "WS", truncatePath(path))
 }
 
 func formatWSClose(path string, duration time.Duration, bytes int64) string {
-	return fmt.Sprintf("  %-4s %-53s -    CLOSED (%s, %s)\r\n", "WS", truncatePath(path), formatDurationHuman(duration), formatBytes(bytes))
+	return fmt.Sprintf("\r  %-4s %-53s -    CLOSED (%s, %s)\r\n", "WS", truncatePath(path), formatDurationHuman(duration), formatBytes(bytes))
 }
 
 func formatLatency(d time.Duration) string {
