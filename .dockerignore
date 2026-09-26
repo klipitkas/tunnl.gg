@@ -24,6 +24,7 @@ docker-compose.yml
 
 # Runtime files
 host_key
+.dev/
 data/
 
 # OS files

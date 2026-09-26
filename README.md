@@ -357,10 +357,26 @@ Response:
 | `make build-tiny` | With UPX compression (if installed) |
 | `make build-all` | Cross-compile for Linux/macOS |
 | `make build-dev` | Fast build with debug symbols |
+| `make dev` | Run a local server on unprivileged ports (see [Local Development](#local-development)) |
 | `make test` | Run tests |
 | `make lint` | Run golangci-lint (v2) |
 | `make vuln` | Check reachable code for known vulnerabilities |
 | `make clean` | Remove build artifacts |
+
+## Local Development
+
+`make dev` runs a server on your machine with a self-signed certificate and
+`DOMAIN=localhost`, so you can try changes before deploying. In another terminal,
+start something on port 3000 and open a tunnel to it:
+
+```bash
+ssh -p 2200 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  -R 80:localhost:3000 localhost
+```
+
+The session shows the tunnel URL, e.g. `https://happy-tiger-a1b2c3d4.localhost`.
+Add the dev HTTPS port to reach it: `curl -k https://happy-tiger-a1b2c3d4.localhost:8443`
+(`*.localhost` resolves to your machine in browsers and curl).
 
 ## How It Works
 

@@ -1,4 +1,4 @@
-.PHONY: build build-small build-tiny build-all build-dev test lint vuln run clean tidy size-check install
+.PHONY: build build-small build-tiny build-all build-dev dev test lint vuln run clean tidy size-check install
 
 # Binary name
 BINARY=tunnl
@@ -59,6 +59,19 @@ build-all: clean
 build-dev:
 	@mkdir -p $(BUILD_DIR)
 	$(GOBUILD) -ldflags="$(VERSION_FLAGS)" -o $(BUILD_DIR)/$(BINARY) ./cmd/tunnl
+
+# Run a local server for development: unprivileged ports, a self-signed
+# certificate, and DOMAIN=localhost. Then, in another terminal:
+#   ssh -p 2200 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -R 80:localhost:3000 localhost
+#   curl -k https://<subdomain>.localhost:8443
+DEV_DIR=.dev
+dev: build-dev
+	@mkdir -p $(DEV_DIR)
+	@test -f $(DEV_DIR)/cert.pem || openssl req -x509 -newkey ed25519 -nodes -days 30 \
+		-subj "/CN=*.localhost" -keyout $(DEV_DIR)/key.pem -out $(DEV_DIR)/cert.pem 2>/dev/null
+	SSH_ADDR=127.0.0.1:2200 HTTP_ADDR=127.0.0.1:8880 HTTPS_ADDR=127.0.0.1:8443 STATS_ADDR=127.0.0.1:9091 \
+	HOST_KEY_PATH=$(DEV_DIR)/host_key TLS_CERT=$(DEV_DIR)/cert.pem TLS_KEY=$(DEV_DIR)/key.pem \
+	DOMAIN=localhost $(BUILD_DIR)/$(BINARY)
 
 # Run tests
 test:
