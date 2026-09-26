@@ -15,7 +15,14 @@ import (
 	"tunnl.gg/internal/server"
 )
 
+// Set at build time with -ldflags "-X main.version=... -X main.commit=..."
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 func main() {
+	log.Printf("tunnl %s (%s)", version, commit)
 	cfg := config.Default()
 
 	if v := os.Getenv("SSH_ADDR"); v != "" {

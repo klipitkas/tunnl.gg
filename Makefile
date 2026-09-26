@@ -1,4 +1,4 @@
-.PHONY: build build-small build-tiny clean test run
+.PHONY: build build-small build-tiny build-all build-dev test lint vuln run clean tidy size-check install
 
 # Binary name
 BINARY=tunnl
@@ -12,15 +12,15 @@ GOBUILD=$(GOCMD) build
 GOTEST=$(GOCMD) test
 GOMOD=$(GOCMD) mod
 
-# Version info (optional, for future use)
+# Version info embedded in the binary and logged at startup
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT?=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-BUILD_TIME?=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
+VERSION_FLAGS=-X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
 # Linker flags for size optimization
 # -s: Omit symbol table and debug info
 # -w: Omit DWARF symbol table
-LDFLAGS=-s -w
+LDFLAGS=-s -w $(VERSION_FLAGS)
 
 # Build tags to exclude unnecessary features
 BUILD_TAGS=
@@ -58,11 +58,19 @@ build-all: clean
 # Development build (faster, with debug info)
 build-dev:
 	@mkdir -p $(BUILD_DIR)
-	$(GOBUILD) -o $(BUILD_DIR)/$(BINARY) ./cmd/tunnl
+	$(GOBUILD) -ldflags="$(VERSION_FLAGS)" -o $(BUILD_DIR)/$(BINARY) ./cmd/tunnl
 
 # Run tests
 test:
 	$(GOTEST) -v ./...
+
+# Run linters (requires golangci-lint v2)
+lint:
+	golangci-lint run ./...
+
+# Check for known vulnerabilities in reachable code
+vuln:
+	$(GOCMD) run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
 # Run the application
 run: build-dev

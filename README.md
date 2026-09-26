@@ -275,6 +275,8 @@ Response:
 | `make build-all` | Cross-compile for Linux/macOS |
 | `make build-dev` | Fast build with debug symbols |
 | `make test` | Run tests |
+| `make lint` | Run golangci-lint (v2) |
+| `make vuln` | Check reachable code for known vulnerabilities |
 | `make clean` | Remove build artifacts |
 
 ## How It Works
