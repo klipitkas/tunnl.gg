@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -131,14 +132,17 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 		return
 	}
 
-	clientConn, _, err := hijacker.Hijack()
+	hijacked, brw, err := hijacker.Hijack()
 	if err != nil {
 		// After Hijack() is called (even on failure), ResponseWriter may be invalid
 		// Just log the error and return - the connection will be closed
 		log.Printf("WebSocket hijack error for %s: %v", sub, err)
 		return
 	}
-	defer clientConn.Close()
+	defer hijacked.Close()
+	// Read through the hijack buffer: it may already hold data the client
+	// sent right after the upgrade request.
+	clientConn := &bufferedConn{Conn: hijacked, r: brw.Reader}
 
 	if err := r.Write(backendConn); err != nil {
 		log.Printf("WebSocket request write error for %s: %v", sub, err)
@@ -171,6 +175,16 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 	if logger != nil {
 		logger.LogWebSocketClose(wsPath, time.Since(wsStart), backendBytes+clientBytes)
 	}
+}
+
+// bufferedConn is a net.Conn whose reads are served from r first.
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	return c.r.Read(p)
 }
 
 // copyWithLimits copies from src to dst with a byte transfer limit and idle timeout.

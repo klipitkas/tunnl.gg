@@ -271,3 +271,33 @@ func TestE2E_DisconnectRemovesTunnel(t *testing.T) {
 		t.Errorf("status after disconnect = %d, want %d", resp.StatusCode, http.StatusNotFound)
 	}
 }
+
+func TestE2E_WebSocketDataSentWithUpgradeRequest(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(echoWebSocketBackend))
+
+	conn, err := net.Dial("tcp", tt.public.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial() error: %v", err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	// Clients may send their first frame without waiting for the 101
+	fmt.Fprintf(conn, "GET /ws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nping", tt.host())
+
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("ReadResponse() error: %v", err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade status = %d, want %d", resp.StatusCode, http.StatusSwitchingProtocols)
+	}
+	got := make([]byte, 4)
+	if _, err := io.ReadFull(br, got); err != nil {
+		t.Fatalf("ReadFull() error: %v (data sent with the upgrade request was lost)", err)
+	}
+	if string(got) != "ping" {
+		t.Errorf("echo = %q, want %q", got, "ping")
+	}
+}
