@@ -16,6 +16,7 @@ type Tunnel struct {
 	Listener       net.Listener
 	CreatedAt      time.Time
 	LastActive     time.Time
+	inFlight       int // requests and WebSockets currently open
 	BindAddr       string
 	BindPort       uint32
 	ClientIP       string // SSH client IP that created this tunnel
@@ -61,11 +62,32 @@ func (t *Tunnel) Touch() {
 	t.mu.Unlock()
 }
 
-// IsExpired returns true if the tunnel has been inactive for too long or exceeded max lifetime
+// BeginRequest marks a request or WebSocket as in flight. The tunnel does not
+// become idle until the returned function is called, so long-lived streams and
+// WebSockets keep it alive. The returned function is safe to call more than once.
+func (t *Tunnel) BeginRequest() (end func()) {
+	t.mu.Lock()
+	t.inFlight++
+	t.LastActive = time.Now()
+	t.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			t.mu.Lock()
+			t.inFlight--
+			t.LastActive = time.Now()
+			t.mu.Unlock()
+		})
+	}
+}
+
+// IsExpired returns true if the tunnel has been inactive for too long or exceeded max lifetime.
+// A tunnel with requests or WebSockets in flight is never inactive.
 func (t *Tunnel) IsExpired() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return time.Since(t.LastActive) > config.InactivityTimeout ||
+	return (t.inFlight == 0 && time.Since(t.LastActive) > config.InactivityTimeout) ||
 		time.Since(t.CreatedAt) > config.MaxTunnelLifetime
 }
 

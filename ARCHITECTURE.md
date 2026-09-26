@@ -116,7 +116,7 @@ Listens on port 443 with pre-configured TLS certificates.
 2. Validate subdomain format (adjective-noun-hex pattern)
 3. Look up tunnel in registry
 4. Check rate limits (25 req/s per visitor IP, 50 req/s per tunnel); excess gets 429
-5. Touch tunnel to reset inactivity timer
+5. Mark the request in flight (the tunnel can't go idle until it finishes)
 6. Show interstitial warning for browser requests (first visit)
 7. Handle WebSocket upgrade if requested
 8. Reverse proxy request to tunnel's internal listener
@@ -216,7 +216,8 @@ penalized, because visitors control the request rate.
 
 ### 9. Inactivity Monitor
 
-Per-tunnel goroutine that checks every minute if `LastActive` exceeds 2 hours or if `CreatedAt` exceeds 24 hours (max lifetime).
+Per-tunnel goroutine that checks every minute if the tunnel has been idle for 2 hours or if `CreatedAt` exceeds 24 hours (max lifetime).
+A tunnel is idle only when no requests or WebSockets are in flight, so long-lived streams and WebSockets keep it alive.
 If expired, closes the SSH connection, which triggers cleanup.
 
 ### 10. Abuse Tracker (`internal/server/abuse.go`)

@@ -61,7 +61,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tun.Touch()
+	defer tun.BeginRequest()()
 	s.IncrementRequests()
 
 	// Show interstitial warning for browser requests

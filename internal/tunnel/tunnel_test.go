@@ -35,6 +35,46 @@ func TestTouch_ResetsInactivity(t *testing.T) {
 	}
 }
 
+func TestIsExpired_NotWhileRequestInFlight(t *testing.T) {
+	tun := newTestTunnel(t)
+
+	end := tun.BeginRequest()
+	// A long-lived stream or WebSocket has been open for longer than the timeout
+	tun.mu.Lock()
+	tun.LastActive = time.Now().Add(-3 * time.Hour)
+	tun.mu.Unlock()
+
+	if tun.IsExpired() {
+		t.Error("tunnel with a request in flight should not expire from inactivity")
+	}
+
+	end()
+	end() // safe to call twice
+	if tun.IsExpired() {
+		t.Error("finishing a request should reset the inactivity timer")
+	}
+
+	tun.mu.Lock()
+	tun.LastActive = time.Now().Add(-3 * time.Hour)
+	tun.mu.Unlock()
+	if !tun.IsExpired() {
+		t.Error("tunnel should expire from inactivity once no requests are in flight")
+	}
+}
+
+func TestIsExpired_MaxLifetimeWhileRequestInFlight(t *testing.T) {
+	tun := newTestTunnel(t)
+	defer tun.BeginRequest()()
+
+	tun.mu.Lock()
+	tun.CreatedAt = time.Now().Add(-25 * time.Hour)
+	tun.mu.Unlock()
+
+	if !tun.IsExpired() {
+		t.Error("max lifetime should apply even with requests in flight")
+	}
+}
+
 func TestIsExpired_NotExpiredInitially(t *testing.T) {
 	tun := newTestTunnel(t)
 	if tun.IsExpired() {

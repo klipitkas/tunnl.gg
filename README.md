@@ -33,7 +33,7 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 | WebSocket idle timeout | 2 hours | WebSocket closed after inactivity |
 | SSH handshake timeout | 30 seconds | Max time for SSH handshake to complete |
 | Connections per minute | 10 | New SSH connections per IP |
-| Inactivity timeout | 2 hours | Tunnel closes after inactivity |
+| Inactivity timeout | 2 hours | Tunnel closes after 2 hours with no requests or open WebSockets |
 | Max tunnel lifetime | 24 hours | Absolute tunnel lifetime limit |
 | Block duration | 1 hour | Temporary IP block after abuse |
 | Violations before block | 10 | SSH connection rate violations before IP block |
