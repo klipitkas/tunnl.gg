@@ -75,7 +75,7 @@ Listens on port 22 (configurable) and handles remote port forwarding requests.
 **Flow:**
 
 1. Client connects: `ssh -t -R 80:localhost:8080 tunnl.gg`
-2. Server performs SSH handshake with 30s timeout (no auth required)
+2. Server drops blocked IPs and enforces handshake concurrency limits, then performs the SSH handshake with a 30s timeout (no auth required)
 3. Server sets `TCP_NODELAY` for low latency
 4. Server generates memorable subdomain (e.g., `happy-tiger-a1b2c3d4`)
 5. Server creates internal TCP listener for tunnel
@@ -255,7 +255,7 @@ type AbuseTracker struct {
 
 - **Connection rate limiting**: Sliding window (1 minute) tracking new SSH connections per IP
 - **Auto-blocking**: IPs repeatedly exceeding the SSH connection rate limit are blocked for 1 hour
-- **Block notification**: Users see block expiry time when attempting to connect
+- **Pre-handshake rejection**: Blocked IPs are dropped before the SSH handshake, without a message, so they cost no key exchange work
 - **Connection closure**: All SSH connections (and their tunnels) are forcibly closed when an IP is blocked
 - **Memory cleanup**: Background goroutine removes stale entries every 5 minutes
 - **Graceful shutdown**: `Stop()` method for clean server shutdown
@@ -300,7 +300,8 @@ Browser                    Server                         Client
 
 5. **Host Validation**: Only requests to `*.domain` are accepted (domain is configurable).
 
-6. **SSH Handshake Timeout**: 30-second deadline prevents malicious clients from holding connections indefinitely during handshake.
+6. **SSH Handshake Limits**: 30-second deadline prevents malicious clients from holding connections indefinitely during handshake,
+   and at most 3 handshakes per IP (100 server-wide) can be in progress at once.
 
 7. **Rate Limiting**:
    - Per IP: Max 3 concurrent tunnels
@@ -313,7 +314,7 @@ Browser                    Server                         Client
    - HTTP rate limits only throttle visitors (429); visitor traffic never kills a tunnel or blocks its owner
    - SSH connection rate limiting: 10 connections/minute per IP; 10 violations block the IP for 1 hour
    - All SSH connections forcibly closed when IP is blocked (tunnels cleaned up automatically)
-   - Users notified of block expiry time
+   - Blocked IPs dropped before the SSH handshake
    - Memory-safe cleanup of tracking data
 
 8. **Request/Response Limits**:

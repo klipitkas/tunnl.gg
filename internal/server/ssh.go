@@ -37,9 +37,17 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		tcpConn.SetNoDelay(true)
 	}
 
+	// Reject before the handshake where possible, since each handshake costs
+	// key exchange work and holds a connection for up to SSHHandshakeTimeout
+	if !s.beginHandshake(clientIP) {
+		conn.Close()
+		return
+	}
+
 	// Do SSH handshake first so we can send error messages to the client
 	conn.SetDeadline(time.Now().Add(config.SSHHandshakeTimeout))
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.sshConfig)
+	s.endHandshake(clientIP)
 	if err != nil {
 		log.Printf("SSH handshake failed: %v", err)
 		return
@@ -259,6 +267,28 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	}
 
 	log.Printf("SSH connection closed for subdomain: %s", sub)
+}
+
+// beginHandshake reports whether an SSH handshake from clientIP may start,
+// reserving a handshake slot if so. Blocked IPs are dropped without a message.
+func (s *Server) beginHandshake(clientIP string) bool {
+	if !s.abuseTracker.GetBlockExpiry(clientIP).IsZero() {
+		return false
+	}
+	if !s.allHandshakes.acquire("") {
+		return false
+	}
+	if !s.handshakes.acquire(clientIP) {
+		s.allHandshakes.release("")
+		return false
+	}
+	return true
+}
+
+// endHandshake releases a slot reserved by beginHandshake.
+func (s *Server) endHandshake(clientIP string) {
+	s.handshakes.release(clientIP)
+	s.allHandshakes.release("")
 }
 
 // sendErrorAndClose sends an error message to the client and closes the connection

@@ -48,9 +48,8 @@ func (b *syncBuffer) String() string {
 
 var publicURLPattern = regexp.MustCompile(`https://([a-z]+-[a-z]+-[0-9a-f]{8})\.`)
 
-// startTestTunnel starts a server, connects an SSH client that forwards
-// tunnel traffic to backend, and waits for the tunnel to go live.
-func startTestTunnel(t *testing.T, backend http.Handler) *testTunnel {
+// startSSHServer starts a server accepting SSH connections and returns its address.
+func startSSHServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	srv := newTestServer(t)
 
@@ -68,12 +67,24 @@ func startTestTunnel(t *testing.T, backend http.Handler) *testTunnel {
 			go srv.HandleSSHConnection(conn)
 		}
 	}()
+	return srv, sshLn.Addr().String()
+}
 
-	client, err := ssh.Dial("tcp", sshLn.Addr().String(), &ssh.ClientConfig{
+func dialSSH(addr string) (*ssh.Client, error) {
+	return ssh.Dial("tcp", addr, &ssh.ClientConfig{
 		User:            "test",
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         5 * time.Second,
 	})
+}
+
+// startTestTunnel starts a server, connects an SSH client that forwards
+// tunnel traffic to backend, and waits for the tunnel to go live.
+func startTestTunnel(t *testing.T, backend http.Handler) *testTunnel {
+	t.Helper()
+	srv, addr := startSSHServer(t)
+
+	client, err := dialSSH(addr)
 	if err != nil {
 		t.Fatalf("ssh.Dial() error: %v", err)
 	}
@@ -400,4 +411,58 @@ func TestE2E_SlowUploadOutlivesServerReadTimeout(t *testing.T) {
 	if string(body) != "5000" {
 		t.Errorf("backend received %q bytes, want 5000 (status %d)", body, resp.StatusCode)
 	}
+}
+
+func TestE2E_BlockedIPDroppedBeforeHandshake(t *testing.T) {
+	srv, addr := startSSHServer(t)
+	srv.abuseTracker.BlockIP("127.0.0.1")
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Dial() error: %v", err)
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	// The server closes the connection without sending its SSH version banner
+	n, err := conn.Read(make([]byte, 64))
+	if n != 0 || err != io.EOF {
+		t.Errorf("Read() = %d, %v; want connection closed before the handshake", n, err)
+	}
+}
+
+func TestE2E_ConcurrentHandshakesPerIPLimited(t *testing.T) {
+	_, addr := startSSHServer(t)
+
+	// Hold handshakes open by connecting and never sending anything
+	stalled := make([]net.Conn, 0, config.MaxHandshakesPerIP)
+	for i := 0; i < config.MaxHandshakesPerIP; i++ {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatalf("Dial() error: %v", err)
+		}
+		defer conn.Close()
+		stalled = append(stalled, conn)
+	}
+	// Wait until the server has started every stalled handshake
+	for _, conn := range stalled {
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if _, err := bufio.NewReader(conn).ReadString('\n'); err != nil {
+			t.Fatalf("reading server version: %v", err)
+		}
+	}
+
+	if client, err := dialSSH(addr); err == nil {
+		client.Close()
+		t.Fatal("SSH connection over the handshake limit should be rejected")
+	}
+
+	stalled[0].Close()
+	waitFor(t, "handshake slot to be released", func() bool {
+		client, err := dialSSH(addr)
+		if err == nil {
+			client.Close()
+		}
+		return err == nil
+	})
 }

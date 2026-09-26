@@ -35,6 +35,7 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 | WebSockets per tunnel | 100 | Max concurrent WebSockets per tunnel |
 | WebSockets per visitor | 20 | Max concurrent WebSockets per visitor IP across all tunnels |
 | SSH handshake timeout | 30 seconds | Max time for SSH handshake to complete |
+| Concurrent handshakes | 3 per IP, 100 total | In-progress SSH handshakes; excess connections are dropped |
 | Connections per minute | 10 | New SSH connections per IP |
 | Inactivity timeout | 2 hours | Tunnel closes after 2 hours with no requests or open WebSockets |
 | Max tunnel lifetime | 24 hours | Absolute tunnel lifetime limit |

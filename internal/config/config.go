@@ -11,8 +11,10 @@ const (
 	MaxTunnelsPerIP   = 3 // Reduced from 5
 	MaxTotalTunnels   = 1000
 
-	// SSH handshake timeout
-	SSHHandshakeTimeout = 30 * time.Second
+	// SSH handshake limits
+	SSHHandshakeTimeout     = 30 * time.Second
+	MaxHandshakesPerIP      = 3   // concurrent in-progress SSH handshakes per IP
+	MaxConcurrentHandshakes = 100 // concurrent in-progress SSH handshakes server-wide
 
 	// HTTP rate limiting. Exceeding a limit only returns 429 to the visitor; it
 	// never penalizes the tunnel owner, since visitors control the request rate.
