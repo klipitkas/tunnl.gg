@@ -12,11 +12,14 @@ const maxPathDisplay = 50
 
 // RequestLogger writes formatted request logs to an io.Writer (typically an SSH channel).
 // It uses a buffered channel and a single drain goroutine to avoid blocking callers.
+// Logging after Close is a no-op, since requests and WebSockets can outlive the
+// SSH session they are logged to.
 type RequestLogger struct {
-	w         io.Writer
-	ch        chan string
-	done      chan struct{}
-	closeOnce sync.Once
+	w      io.Writer
+	ch     chan string
+	done   chan struct{}
+	mu     sync.RWMutex // guards closed and sending on ch against close(ch)
+	closed bool
 }
 
 // NewRequestLogger creates a RequestLogger that writes to w with the given buffer size.
@@ -38,38 +41,43 @@ func (l *RequestLogger) drain() {
 	}
 }
 
-// LogRequest logs an HTTP request with method, path, status, and latency.
-func (l *RequestLogger) LogRequest(method, path string, status int, latency time.Duration) {
-	line := formatRequestLog(method, path, status, latency)
+// send queues a line without blocking, dropping it if the buffer is full or the
+// logger is closed.
+func (l *RequestLogger) send(line string) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if l.closed {
+		return
+	}
 	select {
 	case l.ch <- line:
 	default:
 	}
+}
+
+// LogRequest logs an HTTP request with method, path, status, and latency.
+func (l *RequestLogger) LogRequest(method, path string, status int, latency time.Duration) {
+	l.send(formatRequestLog(method, path, status, latency))
 }
 
 // LogWebSocketOpen logs a WebSocket connection opening.
 func (l *RequestLogger) LogWebSocketOpen(path string) {
-	line := formatWSOpen(path)
-	select {
-	case l.ch <- line:
-	default:
-	}
+	l.send(formatWSOpen(path))
 }
 
 // LogWebSocketClose logs a WebSocket connection closing with duration and bytes transferred.
 func (l *RequestLogger) LogWebSocketClose(path string, duration time.Duration, bytes int64) {
-	line := formatWSClose(path, duration, bytes)
-	select {
-	case l.ch <- line:
-	default:
-	}
+	l.send(formatWSClose(path, duration, bytes))
 }
 
 // Close stops the logger, draining any remaining messages. It is idempotent.
 func (l *RequestLogger) Close() {
-	l.closeOnce.Do(func() {
+	l.mu.Lock()
+	if !l.closed {
+		l.closed = true
 		close(l.ch)
-	})
+	}
+	l.mu.Unlock()
 	<-l.done
 }
 

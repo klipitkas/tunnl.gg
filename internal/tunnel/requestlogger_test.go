@@ -3,7 +3,9 @@ package tunnel
 import (
 	"bytes"
 	"errors"
+	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -120,6 +122,38 @@ func TestCloseIdempotent(t *testing.T) {
 	l := NewRequestLogger(&buf, 16)
 	l.Close()
 	l.Close() // second call should not panic
+}
+
+func TestLogAfterClose(t *testing.T) {
+	var buf bytes.Buffer
+	l := NewRequestLogger(&buf, 16)
+	l.Close()
+
+	// Requests and WebSockets can finish after the SSH session is gone
+	l.LogRequest("GET", "/late", 200, time.Millisecond)
+	l.LogWebSocketOpen("/late")
+	l.LogWebSocketClose("/late", time.Second, 10)
+
+	if strings.Contains(buf.String(), "/late") {
+		t.Errorf("logs after Close should be dropped: %q", buf.String())
+	}
+}
+
+func TestLogConcurrentWithClose(t *testing.T) {
+	l := NewRequestLogger(io.Discard, 16)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 1000; j++ {
+				l.LogRequest("GET", "/", 200, time.Millisecond)
+			}
+		}()
+	}
+	l.Close()
+	wg.Wait()
 }
 
 func TestFormatBytes(t *testing.T) {
