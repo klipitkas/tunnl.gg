@@ -18,6 +18,8 @@ services:
       - HOST_KEY_PATH=/hostkey/host_key
       - TLS_CERT=/certs/fullchain.pem
       - TLS_KEY=/certs/privkey.pem
+      # Set when behind a proxy, e.g. cloudflare (see README "Behind a Proxy")
+      # - TRUSTED_PROXIES=cloudflare
     cap_drop:
       - ALL
     cap_add:
@@ -48,6 +50,8 @@ services:
       - HOST_KEY_PATH=/hostkey/host_key
       - TLS_CERT=/certs/fullchain.pem
       - TLS_KEY=/certs/privkey.pem
+      # Set when behind a proxy, e.g. cloudflare (see README "Behind a Proxy")
+      # - TRUSTED_PROXIES=cloudflare
     cap_drop:
       - ALL
     cap_add:

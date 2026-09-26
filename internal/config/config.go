@@ -85,6 +85,10 @@ type Config struct {
 	TLSCert     string
 	TLSKey      string
 	Domain      string
+	// TrustedProxies lists proxies whose forwarding headers identify visitors:
+	// CIDRs or IPs setting X-Forwarded-For, and "cloudflare" for Cloudflare's
+	// CF-Connecting-IP. Empty trusts nothing, for direct deployments.
+	TrustedProxies string
 }
 
 // Default returns configuration with default values

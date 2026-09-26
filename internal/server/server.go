@@ -13,6 +13,7 @@ import (
 	"github.com/mikesmitty/edkey"
 	"golang.org/x/crypto/ssh"
 
+	"tunnl.gg/internal/clientip"
 	"tunnl.gg/internal/config"
 	"tunnl.gg/internal/subdomain"
 	"tunnl.gg/internal/tunnel"
@@ -36,9 +37,10 @@ type Server struct {
 
 	// Abuse protection
 	abuseTracker *AbuseTracker
-	wsPerTunnel  *connLimiter // concurrent WebSockets keyed by subdomain
-	wsPerVisitor *connLimiter // concurrent WebSockets keyed by visitor IP
-	handshakes   *connLimiter // in-progress SSH handshakes keyed by client IP
+	wsPerTunnel  *connLimiter       // concurrent WebSockets keyed by subdomain
+	wsPerVisitor *connLimiter       // concurrent WebSockets keyed by visitor IP
+	handshakes   *connLimiter       // in-progress SSH handshakes keyed by client IP
+	clientIPs    *clientip.Resolver // resolves visitors behind trusted proxies
 	// in-progress SSH handshakes server-wide, all under the single key ""
 	allHandshakes *connLimiter
 }
@@ -79,6 +81,12 @@ func New(hostKeyPath string, domain string) (*Server, error) {
 	s.sshConfig.AddHostKey(hostKey)
 
 	return s, nil
+}
+
+// SetTrustedProxies sets the proxies whose forwarding headers identify
+// visitors. By default no proxies are trusted.
+func (s *Server) SetTrustedProxies(r *clientip.Resolver) {
+	s.clientIPs = r
 }
 
 // Domain returns the configured domain

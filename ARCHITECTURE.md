@@ -51,6 +51,8 @@ Tunnl.gg is a minimal SSH tunneling service that exposes local applications to t
 tunnl.gg/
 ├── cmd/tunnl/main.go           # Entry point, server initialization
 └── internal/
+    ├── clientip/
+    │   └── clientip.go         # Visitor IP resolution behind trusted proxies (Cloudflare, X-Forwarded-For)
     ├── config/
     │   └── config.go           # Constants and runtime configuration
     ├── server/
@@ -330,8 +332,10 @@ Browser                    Server                         Client
     - Inactivity timeout: 2 hours
     - Max lifetime: 24 hours (regardless of activity)
 
-11. **IP Spoofing Prevention**: Visitor-supplied `X-Forwarded-*` headers are replaced, not trusted (service runs directly on internet).
-    Backends receive `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto` set by the server.
+11. **IP Spoofing Prevention**: Visitor IPs come from the TCP connection unless it is from a proxy listed in `TRUSTED_PROXIES`:
+    `CF-Connecting-IP` from Cloudflare's ranges, or `X-Forwarded-For` (read right to left past trusted proxies) from others.
+    Backends receive `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto` set by the server; visitor-supplied
+    forwarding headers, and `CF-Connecting-IP` not from Cloudflare, are removed.
 
 12. **Phishing Protection**: Browser requests show interstitial warning page (cookie-based, 1 day).
 
@@ -353,6 +357,7 @@ Browser                    Server                         Client
 | `TLS_CERT` | `/etc/letsencrypt/live/tunnl.gg/fullchain.pem` | TLS certificate |
 | `TLS_KEY` | `/etc/letsencrypt/live/tunnl.gg/privkey.pem` | TLS private key |
 | `DOMAIN` | `tunnl.gg` | Domain name for the service |
+| `TRUSTED_PROXIES` | unset | Proxies whose headers identify visitors (CIDRs/IPs and/or `cloudflare`) |
 
 ## Limitations
 

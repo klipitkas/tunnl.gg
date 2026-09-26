@@ -48,6 +48,8 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 tunnl.gg/
 ├── cmd/tunnl/              # Application entry point
 ├── internal/
+│   ├── clientip/           # Visitor IP resolution behind trusted proxies
+│   │   └── clientip.go
 │   ├── config/             # Configuration and constants
 │   │   └── config.go
 │   ├── server/             # Server implementation
@@ -213,6 +215,8 @@ Environment=HOST_KEY_PATH=/var/lib/tunnl/host_key
 Environment=TLS_CERT=/etc/tunnl/fullchain.pem
 Environment=TLS_KEY=/etc/tunnl/privkey.pem
 Environment=DOMAIN=yourdomain.com
+# Only when behind a proxy, see "Behind a Proxy"
+#Environment=TRUSTED_PROXIES=cloudflare
 
 # Bind privileged ports without running as root
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -253,6 +257,7 @@ sudo systemctl enable --now tunnl
 | `TLS_CERT` | `/etc/letsencrypt/live/tunnl.gg/fullchain.pem` | TLS certificate path |
 | `TLS_KEY` | `/etc/letsencrypt/live/tunnl.gg/privkey.pem` | TLS private key path |
 | `DOMAIN` | `tunnl.gg` | Domain name for the service |
+| `TRUSTED_PROXIES` | unset | Proxies whose headers identify visitors: CIDRs/IPs (`X-Forwarded-For`) and/or `cloudflare` (`CF-Connecting-IP`). See [Behind a Proxy](#behind-a-proxy) |
 
 ## Usage
 
@@ -282,6 +287,29 @@ Browser requests show a phishing warning (cookie-based, lasts 1 day). To skip pr
 ```bash
 curl -H "tunnl-skip-browser-warning: 1" https://happy-tiger-a1b2c3d4.tunnl.gg
 ```
+
+### Behind a Proxy
+
+Rate limits, WebSocket limits, and the `X-Forwarded-For` header sent to tunneled apps
+all use the visitor's IP address. By default the server trusts no proxies and uses the
+address of the TCP connection, which is right when it faces the internet directly
+(including most on-prem setups).
+
+When HTTPS traffic reaches the server through proxies, list them in `TRUSTED_PROXIES`
+so the visitor's address is taken from their headers:
+
+| Setup | `TRUSTED_PROXIES` |
+|-------|-------------------|
+| Directly on the internet, or on-prem with no proxy | unset |
+| Behind Cloudflare | `cloudflare` |
+| Behind your own reverse proxy or load balancer | its IPs or CIDRs, e.g. `10.0.0.0/8` |
+| Your proxy behind Cloudflare | `cloudflare,10.0.0.0/8` |
+
+`cloudflare` trusts `CF-Connecting-IP` only from Cloudflare's published ranges
+([cloudflare.com/ips](https://www.cloudflare.com/ips/), built in). Other entries trust
+`X-Forwarded-For`, read right to left past trusted proxies, so addresses a visitor adds
+themselves are ignored. Headers from any other address are ignored, so only list proxies
+you control, and firewall ports 80 and 443 so only those proxies can reach the server.
 
 ## Stats Endpoint
 

@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"tunnl.gg/internal/clientip"
 	"tunnl.gg/internal/config"
 )
 
@@ -529,5 +530,86 @@ func TestE2E_ForwardedHeaders(t *testing.T) {
 	// The test server is plain HTTP; production terminates TLS, giving https
 	if want := "for=127.0.0.1 host=" + tt.host() + " proto=http"; string(body) != want {
 		t.Errorf("backend saw %q, want %q", body, want)
+	}
+}
+
+// serveDirect sends a request straight to the server's handler as if it came
+// from peer remoteAddr, and returns the response.
+func (tt *testTunnel) serveDirect(remoteAddr string, headers map[string]string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "https://"+tt.host()+"/", nil)
+	req.RemoteAddr = remoteAddr
+	req.Header.Set("User-Agent", "curl/8.0")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	tt.srv.ServeHTTP(rec, req)
+	return rec
+}
+
+// echoClientHeaders reports the client identity headers the app receives.
+func echoClientHeaders(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "for=%s cf=%s", r.Header.Get("X-Forwarded-For"), r.Header.Get("CF-Connecting-IP"))
+}
+
+func TestE2E_DirectDeploymentIgnoresClientIPHeaders(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(echoClientHeaders))
+
+	rec := tt.serveDirect("203.0.113.7:4321", map[string]string{
+		"CF-Connecting-IP": "6.6.6.6",
+		"X-Forwarded-For":  "6.6.6.6",
+	})
+	if want := "for=203.0.113.7 cf="; rec.Body.String() != want {
+		t.Errorf("app saw %q, want %q (spoofed headers dropped)", rec.Body.String(), want)
+	}
+}
+
+func TestE2E_CloudflareVisitorResolved(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(echoClientHeaders))
+	resolver, _ := clientip.Parse("cloudflare")
+	tt.srv.SetTrustedProxies(resolver)
+
+	rec := tt.serveDirect("173.245.48.10:443", map[string]string{"CF-Connecting-IP": "198.51.100.9"})
+	if want := "for=198.51.100.9 cf=198.51.100.9"; rec.Body.String() != want {
+		t.Errorf("app saw %q, want %q", rec.Body.String(), want)
+	}
+
+	// Connecting to the origin directly can't claim to be Cloudflare
+	rec = tt.serveDirect("203.0.113.7:4321", map[string]string{"CF-Connecting-IP": "6.6.6.6"})
+	if want := "for=203.0.113.7 cf="; rec.Body.String() != want {
+		t.Errorf("direct request: app saw %q, want %q", rec.Body.String(), want)
+	}
+}
+
+func TestE2E_CloudflareVisitorsRateLimitedSeparately(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	resolver, _ := clientip.Parse("cloudflare")
+	tt.srv.SetTrustedProxies(resolver)
+
+	// Two visitors reach the origin through the same Cloudflare edge IP
+	const edge = "173.245.48.10:443"
+	limited := false
+	for i := 0; i < config.VisitorBurstSize*2 && !limited; i++ {
+		limited = tt.serveDirect(edge, map[string]string{"CF-Connecting-IP": "198.51.100.1"}).Code == http.StatusTooManyRequests
+	}
+	if !limited {
+		t.Fatal("flooding visitor should be rate limited")
+	}
+	if code := tt.serveDirect(edge, map[string]string{"CF-Connecting-IP": "198.51.100.2"}).Code; code != http.StatusOK {
+		t.Errorf("other visitor behind the same edge got %d, want %d", code, http.StatusOK)
+	}
+}
+
+func TestE2E_OnPremProxyVisitorResolved(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(echoClientHeaders))
+	resolver, _ := clientip.Parse("10.0.0.0/8")
+	tt.srv.SetTrustedProxies(resolver)
+
+	rec := tt.serveDirect("10.0.0.5:51000", map[string]string{
+		"X-Forwarded-For":  "6.6.6.6, 198.51.100.9",
+		"CF-Connecting-IP": "6.6.6.6",
+	})
+	if want := "for=198.51.100.9 cf="; rec.Body.String() != want {
+		t.Errorf("app saw %q, want %q", rec.Body.String(), want)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"tunnl.gg/internal/clientip"
 	"tunnl.gg/internal/config"
 	"tunnl.gg/internal/subdomain"
 	"tunnl.gg/internal/tunnel"
@@ -55,7 +56,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Throttle only the visitor: the tunnel owner doesn't control who sends
 	// traffic to their URL, so exceeding the limit must not affect the tunnel.
-	visitor := visitorKey(r.RemoteAddr)
+	client := s.clientIPs.Resolve(r.RemoteAddr, r.Header)
+	visitor := visitorKey(client.Addr.String())
 	if !tun.AllowRequest(visitor) {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
@@ -86,12 +88,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		defer s.wsPerTunnel.release(sub)
 
-		s.handleWebSocket(w, r, tun, sub)
+		s.handleWebSocket(w, r, tun, sub, client)
 		return
 	}
 
 	requestStart := time.Now()
-	r = r.WithContext(tunnel.WithOrigin(r.Context(), r.RemoteAddr))
+	r = r.WithContext(tunnel.WithOrigin(r.Context(), originAddr(client, r.RemoteAddr)))
 	dw, r, stopDeadlines := newProxyDeadlines(w, r, config.ProxyIdleTimeout)
 	defer stopDeadlines()
 	sw := &statusCaptureWriter{ResponseWriter: dw}
@@ -108,8 +110,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr.Out.URL.Scheme = "http"
 			pr.Out.URL.Host = pr.In.Host
 			pr.Out.Host = pr.In.Host
-			// Replaces any X-Forwarded-* headers sent by the visitor
-			pr.SetXForwarded()
+			setForwardedHeaders(pr.Out.Header, pr.In, client)
 		},
 		Transport: tun.Transport(),
 		ModifyResponse: func(resp *http.Response) error {
@@ -148,8 +149,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tunnel.Tunnel, sub string) {
-	backendConn, err := tun.Dial(tunnel.WithOrigin(r.Context(), r.RemoteAddr))
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tunnel.Tunnel, sub string, client clientip.Result) {
+	backendConn, err := tun.Dial(tunnel.WithOrigin(r.Context(), originAddr(client, r.RemoteAddr)))
 	if err != nil {
 		log.Printf("WebSocket backend dial error for %s: %v", sub, err)
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
@@ -307,6 +308,41 @@ func (s *Server) redirectToWarningPage(w http.ResponseWriter, r *http.Request, s
 func isWebSocketRequest(r *http.Request) bool {
 	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket") &&
 		strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
+}
+
+// setForwardedHeaders replaces the forwarding headers on a request to the
+// tunneled app, so the app only sees values set by this server: the resolved
+// visitor, the public host, and the scheme the visitor used. CF-Connecting-IP
+// is kept only when it came from Cloudflare; otherwise a visitor could set it.
+func setForwardedHeaders(out http.Header, in *http.Request, client clientip.Result) {
+	out.Del("Forwarded")
+	out.Del("X-Forwarded-For")
+	out.Del("X-Forwarded-Host")
+	out.Del("X-Forwarded-Proto")
+	if !client.ViaCloudflare {
+		out.Del("CF-Connecting-IP")
+	}
+
+	if client.Addr.IsValid() {
+		out.Set("X-Forwarded-For", client.Addr.String())
+	}
+	out.Set("X-Forwarded-Host", in.Host)
+	if in.TLS != nil {
+		out.Set("X-Forwarded-Proto", "https")
+	} else {
+		out.Set("X-Forwarded-Proto", "http")
+	}
+}
+
+// originAddr returns the "ip:port" to report as a forwarded channel's origin:
+// the resolved visitor, with the peer's port since a proxy doesn't forward the
+// visitor's port.
+func originAddr(client clientip.Result, remoteAddr string) string {
+	_, port, err := net.SplitHostPort(remoteAddr)
+	if err != nil || !client.Addr.IsValid() {
+		return remoteAddr
+	}
+	return net.JoinHostPort(client.Addr.String(), port)
 }
 
 // visitorKey returns the rate-limit key for a request's remote address. IPv6

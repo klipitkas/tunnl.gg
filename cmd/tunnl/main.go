@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"tunnl.gg/internal/clientip"
 	"tunnl.gg/internal/config"
 	"tunnl.gg/internal/server"
 )
@@ -49,11 +50,23 @@ func main() {
 	if v := os.Getenv("DOMAIN"); v != "" {
 		cfg.Domain = v
 	}
+	if v := os.Getenv("TRUSTED_PROXIES"); v != "" {
+		cfg.TrustedProxies = v
+	}
+
+	trustedProxies, err := clientip.Parse(cfg.TrustedProxies)
+	if err != nil {
+		log.Fatalf("Invalid TRUSTED_PROXIES: %v", err)
+	}
+	if cfg.TrustedProxies != "" {
+		log.Printf("Trusting client IP headers from proxies: %s", cfg.TrustedProxies)
+	}
 
 	srv, err := server.New(cfg.HostKeyPath, cfg.Domain)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
+	srv.SetTrustedProxies(trustedProxies)
 
 	// Start SSH server
 	sshListener, err := net.Listen("tcp", cfg.SSHAddr)
