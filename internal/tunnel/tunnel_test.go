@@ -144,7 +144,7 @@ func TestClose_FlushesAndDetachesLogger(t *testing.T) {
 
 	var buf bytes.Buffer
 	tun.SetLogger(NewRequestLogger(&buf, 16))
-	tun.Logger().LogRequest("GET", "/pending", 200, time.Millisecond)
+	tun.Logger().Log(Entry{Time: time.Now(), Method: "GET", Target: "/pending", Status: 200, Bytes: 0})
 
 	tun.Close()
 

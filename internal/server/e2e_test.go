@@ -28,7 +28,9 @@ type testTunnel struct {
 	sub    string
 	client *ssh.Client
 	public *httptest.Server
-	output *syncBuffer // SSH session output (banner and request logs)
+	local  *httptest.Server // the tunneled app
+	output *syncBuffer      // SSH session output (banner and request logs)
+	stdin  io.WriteCloser   // SSH session input, as typed by the user
 }
 
 // syncBuffer is a bytes.Buffer safe for concurrent use.
@@ -167,7 +169,7 @@ func openTunnel(t *testing.T, srv *Server, addr string, clientConfig *ssh.Client
 	public := httptest.NewServer(srv)
 	t.Cleanup(public.Close)
 
-	return &testTunnel{srv: srv, sub: sub, client: client, public: public, output: output}
+	return &testTunnel{srv: srv, sub: sub, client: client, public: public, output: output, stdin: stdin, local: local}
 }
 
 // relayToLocal copies a forwarded SSH channel to and from a local TCP server.

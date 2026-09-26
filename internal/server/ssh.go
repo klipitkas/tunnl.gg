@@ -142,42 +142,46 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	}
 
 	url := fmt.Sprintf("https://%s.%s", sub, s.domain)
-	expiresAt := tun.CreatedAt.Add(config.MaxTunnelLifetime).Format("Jan 02, 2006 at 15:04 MST")
-	expiresLine := fmt.Sprintf("%s (or %s idle)", expiresAt, formatDuration(config.InactivityTimeout))
+	urlMessage := sessionBanner(url, s.domain, stable)
 
-	// ANSI color codes
-	const (
-		reset     = "\033[0m"
-		gray      = "\033[38;5;245m"
-		boldGreen = "\033[1;32m"
-		purple    = "\033[38;5;141m"
-	)
-
-	urlNote := "random; connect as " + config.StableSSHUser + "@ to keep the same URL"
+	// endSession tells the user why the session is ending, with a summary of
+	// its traffic, then closes the connection
+	endSession := func(reason string) {
+		if logger := tun.Logger(); logger != nil {
+			logger.Notice(reason + ". " + logger.Summary() + ".")
+			logger.Close() // flush before the connection closes
+		}
+		sshConn.Close()
+	}
+	reconnectHint := "Reconnecting gives you a new URL; connect as " + config.StableSSHUser + "@ to keep one."
 	if stable {
-		urlNote = "stays the same for your SSH key"
-	}
-	urlMessage := "\r\n" +
-		gray + "Connected to " + s.domain + "." + reset + "\r\n" +
-		boldGreen + "Tunnel is live!" + reset + "\r\n" +
-		gray + "Public URL: " + purple + url + gray + " (" + urlNote + ")" + reset + "\r\n" +
-		gray + "Expires:    " + expiresLine + reset + "\r\n\r\n"
-
-	// QR code of the URL, for opening the tunnel on a phone
-	if code, err := renderQR(url, ""); err == nil {
-		urlMessage += code + "\r\n"
+		reconnectHint = "Reconnect to keep using the same URL."
 	}
 
-	// Inactivity checker
+	// Expiry checker: warns before the lifetime limit and closes the tunnel
+	// once it expires
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
+		warned := false
 		for {
 			select {
 			case <-ticker.C:
+				remaining := time.Until(tun.CreatedAt.Add(config.MaxTunnelLifetime))
+				if !warned && remaining > 0 && remaining <= lifetimeWarning {
+					warned = true
+					if logger := tun.Logger(); logger != nil {
+						logger.Notice(fmt.Sprintf("This tunnel closes in %s (%s limit). %s",
+							formatDuration(remaining.Round(time.Minute)), formatDuration(config.MaxTunnelLifetime), reconnectHint))
+					}
+				}
 				if tun.IsExpired() {
-					log.Printf("Tunnel %s expired due to inactivity", sub)
-					sshConn.Close()
+					reason := "Tunnel closed after " + formatDuration(config.InactivityTimeout) + " without traffic"
+					if remaining <= 0 {
+						reason = "Tunnel closed: reached the " + formatDuration(config.MaxTunnelLifetime) + " limit"
+					}
+					log.Printf("Tunnel %s expired: %s", sub, reason)
+					endSession(reason)
 					return
 				}
 			case <-ctx.Done():
@@ -238,7 +242,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 				if req.WantReply {
 					req.Reply(true, nil)
 				}
-				sshConn.Close()
+				endSession("Stopped")
 				return
 			default:
 				if req.WantReply {
@@ -256,12 +260,48 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 			break
 		}
 		if buf[0] == 0x03 { // Ctrl+C
-			sshConn.Close()
+			endSession("Stopped")
 			break
 		}
 	}
 
 	log.Printf("SSH connection closed for subdomain: %s", sub)
+}
+
+// lifetimeWarning is how long before the lifetime limit the user is warned.
+const lifetimeWarning = 10 * time.Minute
+
+// Session banner colors.
+const (
+	bannerReset  = "\033[0m"
+	bannerGray   = "\033[38;5;245m"
+	bannerGreen  = "\033[1;32m"
+	bannerPurple = "\033[38;5;141m"
+)
+
+// sessionBanner is shown when a tunnel goes live: its URL, expiry, a QR code
+// of the URL, and the header of the request log that follows.
+func sessionBanner(url, domain string, stable bool) string {
+	label := func(name string) string {
+		return bannerGray + fmt.Sprintf("  %-9s", name) + bannerReset
+	}
+	urlNote := "random: connect as " + config.StableSSHUser + "@ to keep the same URL"
+	if stable {
+		urlNote = "stays the same for your SSH key"
+	}
+
+	banner := "\r\n" +
+		bannerGreen + "  ● Tunnel is live" + bannerReset + bannerGray + " on " + domain + bannerReset + "\r\n\r\n" +
+		label("URL") + bannerPurple + url + bannerReset + "\r\n" +
+		label("") + bannerGray + urlNote + bannerReset + "\r\n" +
+		label("Expires") + "in " + formatDuration(config.MaxTunnelLifetime) +
+		", or after " + formatDuration(config.InactivityTimeout) + " without traffic\r\n\r\n"
+
+	// QR code of the URL, for opening the tunnel on a phone
+	if code, err := renderQR(url, "  "); err == nil {
+		banner += code + "\r\n"
+	}
+	return banner + bannerGray + "  Requests appear below. Press Ctrl+C to stop." + bannerReset + "\r\n\r\n" + tunnel.Header()
 }
 
 // stableTakeoverTimeout bounds how long a new connection waits for an older

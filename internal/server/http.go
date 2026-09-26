@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"tunnl.gg/internal/clientip"
 	"tunnl.gg/internal/config"
@@ -59,6 +62,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	client := s.clientIPs.Resolve(r.RemoteAddr, r.Header)
 	visitor := visitorKey(client.Addr.String())
 	if !tun.AllowRequest(visitor) {
+		logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "rate limited by tunnl")
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
@@ -71,6 +75,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if isBrowserRequest(r) &&
 		r.Header.Get("tunnl-skip-browser-warning") == "" &&
 		!hasWarningCookie(r, sub) {
+		logTunnlEvent(tun, r, client, http.StatusTemporaryRedirect, "browser sent to the warning page")
 		s.redirectToWarningPage(w, r, sub)
 		return
 	}
@@ -78,11 +83,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if isWebSocketRequest(r) {
 		// Upgraded connections are long-lived, so cap how many are open at once
 		if !s.wsPerVisitor.acquire(visitor) {
+			logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "too many open WebSockets from this visitor (tunnl limit)")
 			http.Error(w, "Too Many WebSocket Connections", http.StatusTooManyRequests)
 			return
 		}
 		defer s.wsPerVisitor.release(visitor)
 		if !s.wsPerTunnel.acquire(sub) {
+			logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "too many open WebSockets on this tunnel (tunnl limit)")
 			http.Error(w, "Too Many WebSocket Connections", http.StatusTooManyRequests)
 			return
 		}
@@ -95,12 +102,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Proxied requests can stay open for minutes, for example when a tunnel's
 	// app never responds, so cap how many are in flight
 	if !s.reqPerVisitor.acquire(visitor) {
+		logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "too many open requests from this visitor (tunnl limit)")
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
 	}
 	defer s.reqPerVisitor.release(visitor)
 	if !s.reqPerTunnel.acquire(sub) {
+		logTunnlEvent(tun, r, client, http.StatusServiceUnavailable, "too many open requests on this tunnel (tunnl limit)")
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
@@ -108,6 +117,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer s.reqPerTunnel.release(sub)
 
 	requestStart := time.Now()
+	target := r.URL.RequestURI()
+	var proxyErr error
 	r = r.WithContext(tunnel.WithOrigin(r.Context(), originAddr(client, r.RemoteAddr)))
 	dw, r, stopDeadlines := newProxyDeadlines(w, r, config.ProxyIdleTimeout)
 	defer stopDeadlines()
@@ -148,6 +159,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("Proxy error for %s: %v", sub, err)
+			proxyErr = err
 			setSecurityHeaders(w)
 			if errors.Is(err, errResponseTooLarge) {
 				http.Error(w, "Response Too Large", http.StatusBadGateway)
@@ -159,15 +171,81 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	proxy.ServeHTTP(sw, r)
 
+	logEntry(tun, tunnel.Entry{
+		Time:    requestStart,
+		Method:  r.Method,
+		Target:  target,
+		Status:  sw.status,
+		Bytes:   sw.bytes,
+		Latency: time.Since(requestStart),
+		Visitor: client.Addr.String(),
+		Detail:  describeProxyError(proxyErr),
+	})
+}
+
+// logEntry writes e to the tunnel's request log, if its SSH session has one.
+func logEntry(tun *tunnel.Tunnel, e tunnel.Entry) {
 	if logger := tun.Logger(); logger != nil {
-		logger.LogRequest(r.Method, r.URL.Path, sw.status, time.Since(requestStart))
+		logger.Log(e)
+	}
+}
+
+// logTunnlEvent logs a request that tunnl answered itself, without the app.
+func logTunnlEvent(tun *tunnel.Tunnel, r *http.Request, client clientip.Result, status int, note string) {
+	logEntry(tun, tunnel.Entry{
+		Time:      time.Now(),
+		Method:    r.Method,
+		Target:    r.URL.RequestURI(),
+		Status:    status,
+		Bytes:     -1,
+		Visitor:   client.Addr.String(),
+		Note:      note,
+		FromTunnl: true,
+	})
+}
+
+// describeProxyError explains in plain words why a request couldn't be
+// completed by the tunneled app, for the tunnel owner's request log.
+func describeProxyError(err error) string {
+	var openErr *ssh.OpenChannelError
+	switch {
+	case err == nil:
+		return ""
+	case errors.As(err, &openErr):
+		// The SSH client couldn't connect to the local app, e.g. nothing is
+		// listening on the forwarded port
+		reason := openErr.Message
+		if reason == "" {
+			reason = openErr.Reason.String()
+		}
+		return "your local app didn't accept the connection: " + strings.ToLower(reason)
+	case errors.Is(err, errResponseTooLarge):
+		return fmt.Sprintf("response larger than %s, not sent", tunnel.FormatBytes(config.MaxResponseBodySize))
+	case errors.Is(err, context.DeadlineExceeded):
+		return "your SSH client didn't connect to your local app in time"
+	case errors.Is(err, context.Canceled):
+		return "canceled: the visitor left, or no data for " + tunnel.FormatDuration(config.ProxyIdleTimeout)
+	default:
+		return "couldn't get a response from your local app: " + err.Error()
 	}
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tunnel.Tunnel, sub string, client clientip.Result) {
+	wsEntry := tunnel.Entry{
+		Time:    time.Now(),
+		Method:  "WS",
+		Target:  r.URL.RequestURI(),
+		Bytes:   -1,
+		Visitor: client.Addr.String(),
+	}
+
 	backendConn, err := tun.Dial(tunnel.WithOrigin(r.Context(), originAddr(client, r.RemoteAddr)))
 	if err != nil {
 		log.Printf("WebSocket backend dial error for %s: %v", sub, err)
+		failed := wsEntry
+		failed.Status = http.StatusBadGateway
+		failed.Detail = describeProxyError(err)
+		logEntry(tun, failed)
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
 		return
 	}
@@ -200,12 +278,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 		return
 	}
 
-	logger := tun.Logger()
-	wsPath := r.URL.Path
-	wsStart := time.Now()
-	if logger != nil {
-		logger.LogWebSocketOpen(wsPath)
-	}
+	opened := wsEntry
+	opened.Note = "open"
+	logEntry(tun, opened)
 
 	// Copy data bidirectionally with limits
 	var backendBytes, clientBytes int64
@@ -230,9 +305,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 	backendConn.Close()
 	<-clientDone
 
-	if logger != nil {
-		logger.LogWebSocketClose(wsPath, time.Since(wsStart), backendBytes+clientBytes)
-	}
+	closed := wsEntry
+	closed.Time = time.Now()
+	closed.Note = fmt.Sprintf("closed after %s, %s",
+		tunnel.FormatDuration(time.Since(wsEntry.Time)), tunnel.FormatBytes(backendBytes+clientBytes))
+	logEntry(tun, closed)
 }
 
 // bufferedConn is a net.Conn whose reads are served from r first.
@@ -429,10 +506,12 @@ func (l *limitedReadCloser) Close() error {
 	return l.rc.Close()
 }
 
-// statusCaptureWriter wraps http.ResponseWriter to capture the status code.
+// statusCaptureWriter wraps http.ResponseWriter to capture the status code
+// and the number of body bytes written.
 type statusCaptureWriter struct {
 	http.ResponseWriter
 	status      int
+	bytes       int64
 	wroteHeader bool
 }
 
@@ -450,7 +529,9 @@ func (w *statusCaptureWriter) Write(b []byte) (int, error) {
 		w.status = http.StatusOK
 		w.wroteHeader = true
 	}
-	return w.ResponseWriter.Write(b)
+	n, err := w.ResponseWriter.Write(b)
+	w.bytes += int64(n)
+	return n, err
 }
 
 // Unwrap returns the underlying ResponseWriter for interface passthrough (e.g., http.Flusher).

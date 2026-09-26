@@ -16,6 +16,7 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 
 - Memorable subdomain per connection (e.g., `https://happy-tiger-a1b2c3d4.tunnl.gg`)
 - QR code of the URL in the terminal, for opening the tunnel on a phone
+- Live, colored request log in your terminal: path and query, status, size, timing, and visitor, with plain-words explanations when a request fails
 - Optional stable URL tied to your SSH key (`stable@`), no account needed
 - HTTPS for every tunnel with a wildcard certificate you provide (e.g. from Let's Encrypt)
 - WebSocket support

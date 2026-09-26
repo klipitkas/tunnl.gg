@@ -3,12 +3,54 @@ package tunnel
 import (
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 	"unicode"
 )
 
-const maxPathDisplay = 50
+// Terminal colors for the request log.
+const (
+	colorReset   = "\033[0m"
+	colorBold    = "\033[1m"
+	colorDim     = "\033[38;5;245m"
+	colorRed     = "\033[31m"
+	colorGreen   = "\033[32m"
+	colorYellow  = "\033[33m"
+	colorBlue    = "\033[34m"
+	colorMagenta = "\033[35m"
+	colorCyan    = "\033[36m"
+)
+
+// Column widths of a request log line.
+const (
+	indentWidth  = 2
+	timeWidth    = 8 // "15:04:05"
+	methodWidth  = 7 // "OPTIONS"
+	targetWidth  = 40
+	statusWidth  = 6 // "STATUS"
+	sizeWidth    = 8 // "999.9 KB"
+	latencyWidth = 6 // "10.0s"
+)
+
+// tunnlNotesPerSecond caps how many lines are shown for events handled by
+// tunnl itself, such as throttled visitors, so a flood can't flood the terminal.
+const tunnlNotesPerSecond = 5
+
+// Entry is one request, WebSocket, or tunnl event in the request log.
+type Entry struct {
+	Time    time.Time
+	Method  string        // HTTP method, or "WS" for a WebSocket
+	Target  string        // path and query string
+	Status  int           // HTTP status, or 0 if there is none
+	Bytes   int64         // response body size, or -1 if not applicable
+	Latency time.Duration // time to respond, or 0 if not applicable
+	Visitor string        // visitor IP address
+	Note    string        // shown at the end of the line
+	Detail  string        // explanation shown on its own line underneath
+	// FromTunnl marks events handled by tunnl rather than the tunneled app.
+	FromTunnl bool
+}
 
 // RequestLogger writes formatted request logs to an io.Writer (typically an SSH channel).
 // It uses a buffered channel and a single drain goroutine to avoid blocking callers.
@@ -20,14 +62,23 @@ type RequestLogger struct {
 	done   chan struct{}
 	mu     sync.RWMutex // guards closed and sending on ch against close(ch)
 	closed bool
+
+	statsMu     sync.Mutex // guards the fields below
+	requests    int
+	errors      int   // 5xx responses
+	bytes       int64 // response bytes served
+	turnedAway  int   // requests turned away by tunnl
+	notes       *RateLimiter
+	notesHidden int // tunnl notes left out since the last one shown
 }
 
 // NewRequestLogger creates a RequestLogger that writes to w with the given buffer size.
 func NewRequestLogger(w io.Writer, bufSize int) *RequestLogger {
 	l := &RequestLogger{
-		w:    w,
-		ch:   make(chan string, bufSize),
-		done: make(chan struct{}),
+		w:     w,
+		ch:    make(chan string, bufSize),
+		done:  make(chan struct{}),
+		notes: NewRateLimiter(tunnlNotesPerSecond, tunnlNotesPerSecond),
 	}
 	go l.drain()
 	return l
@@ -55,19 +106,60 @@ func (l *RequestLogger) send(line string) {
 	}
 }
 
-// LogRequest logs an HTTP request with method, path, status, and latency.
-func (l *RequestLogger) LogRequest(method, path string, status int, latency time.Duration) {
-	l.send(formatRequestLog(method, path, status, latency))
+// Log counts an entry and writes it to the log. Entries from tunnl itself are
+// rate limited; the next one shown says how many were left out.
+func (l *RequestLogger) Log(e Entry) {
+	l.statsMu.Lock()
+	switch {
+	case e.FromTunnl:
+		if e.Status >= 400 {
+			l.turnedAway++
+		}
+	case e.Status > 0:
+		l.requests++
+		if e.Status >= 500 {
+			l.errors++
+		}
+		if e.Bytes > 0 {
+			l.bytes += e.Bytes
+		}
+	}
+	if e.FromTunnl {
+		if !l.notes.Allow() {
+			l.notesHidden++
+			l.statsMu.Unlock()
+			return
+		}
+		if l.notesHidden > 0 {
+			e.Note += fmt.Sprintf(" (+%d similar not shown)", l.notesHidden)
+			l.notesHidden = 0
+		}
+	}
+	l.statsMu.Unlock()
+
+	l.send(formatEntry(e))
 }
 
-// LogWebSocketOpen logs a WebSocket connection opening.
-func (l *RequestLogger) LogWebSocketOpen(path string) {
-	l.send(formatWSOpen(path))
+// Notice writes a message line to the log, such as a warning or a summary.
+func (l *RequestLogger) Notice(message string) {
+	l.send("\r" + strings.Repeat(" ", indentWidth) + colorYellow + sanitizeTerminalText(message) + colorReset + "\r\n")
 }
 
-// LogWebSocketClose logs a WebSocket connection closing with duration and bytes transferred.
-func (l *RequestLogger) LogWebSocketClose(path string, duration time.Duration, bytes int64) {
-	l.send(formatWSClose(path, duration, bytes))
+// Summary describes the traffic logged so far, e.g. "12 requests, 1 error, 3.4 KB served".
+func (l *RequestLogger) Summary() string {
+	l.statsMu.Lock()
+	defer l.statsMu.Unlock()
+	parts := []string{plural(l.requests, "request")}
+	if l.errors > 0 {
+		parts = append(parts, plural(l.errors, "error"))
+	}
+	if l.bytes > 0 {
+		parts = append(parts, formatBytes(l.bytes)+" served")
+	}
+	if l.turnedAway > 0 {
+		parts = append(parts, fmt.Sprintf("%d turned away by tunnl", l.turnedAway))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Close stops the logger, draining any remaining messages. It is idempotent.
@@ -81,45 +173,131 @@ func (l *RequestLogger) Close() {
 	<-l.done
 }
 
-func truncatePath(path string) string {
-	path = sanitizeTerminalText(path)
-	if len(path) > maxPathDisplay {
-		runes := []rune(path)
-		if len(runes) > maxPathDisplay {
-			return string(runes[:maxPathDisplay-3]) + "..."
-		}
-	}
-	return path
+// Header returns the column headings of the request log.
+func Header() string {
+	return "\r" + strings.Repeat(" ", indentWidth) + colorDim +
+		fmt.Sprintf("%-*s  %-*s  %-*s  %-*s  %*s  %*s  %s",
+			timeWidth, "TIME UTC", methodWidth, "METHOD", targetWidth, "PATH",
+			statusWidth, "STATUS", sizeWidth, "SIZE", latencyWidth, "TOOK", "VISITOR") +
+		colorReset + "\r\n"
 }
 
 // Log lines start with \r so they begin at the left edge even when other output
 // in the same terminal, such as a local server's own logs written with a bare
 // \n, has left the cursor partway along a line.
+func formatEntry(e Entry) string {
+	var b strings.Builder
+	b.WriteString("\r" + strings.Repeat(" ", indentWidth))
+	b.WriteString(colorDim + e.Time.UTC().Format("15:04:05") + colorReset + "  ")
 
-func formatRequestLog(method, path string, status int, latency time.Duration) string {
-	return fmt.Sprintf("\r  %-4s %-53s %d  %s\r\n", sanitizeTerminalText(method), truncatePath(path), status, formatLatency(latency))
+	method := sanitizeTerminalText(e.Method)
+	b.WriteString(methodColor(method) + fmt.Sprintf("%-*s", methodWidth, method) + colorReset + "  ")
+	b.WriteString(fmt.Sprintf("%-*s", targetWidth, fitTarget(e.Target)) + "  ")
+
+	if e.Status > 0 {
+		b.WriteString(statusColor(e.Status) + fmt.Sprintf("%-*d", statusWidth, e.Status) + colorReset + "  ")
+	} else {
+		b.WriteString(strings.Repeat(" ", statusWidth+2))
+	}
+
+	size := ""
+	if e.Bytes >= 0 && e.Status > 0 && !e.FromTunnl {
+		size = formatBytes(e.Bytes)
+	}
+	b.WriteString(colorDim + fmt.Sprintf("%*s", sizeWidth, size) + colorReset + "  ")
+
+	latency := ""
+	if e.Latency > 0 {
+		latency = formatLatency(e.Latency)
+	}
+	b.WriteString(latencyColor(e.Latency) + fmt.Sprintf("%*s", latencyWidth, latency) + colorReset + "  ")
+
+	b.WriteString(colorDim + sanitizeTerminalText(e.Visitor) + colorReset)
+	if e.Note != "" {
+		noteColor := colorDim
+		if e.FromTunnl {
+			noteColor = colorMagenta
+		}
+		b.WriteString("  " + noteColor + sanitizeTerminalText(e.Note) + colorReset)
+	}
+	b.WriteString("\r\n")
+
+	if e.Detail != "" {
+		b.WriteString("\r" + strings.Repeat(" ", indentWidth+timeWidth+2))
+		b.WriteString(colorRed + "↳ " + sanitizeTerminalText(e.Detail) + colorReset + "\r\n")
+	}
+	return b.String()
 }
 
-func formatWSOpen(path string) string {
-	return fmt.Sprintf("\r  %-4s %-53s -    OPEN\r\n", "WS", truncatePath(path))
+// fitTarget escapes a request target and shortens it to the path column,
+// cutting from the middle so the start of the path and the end of the query
+// string both stay visible.
+func fitTarget(target string) string {
+	runes := []rune(sanitizeTerminalText(target))
+	if len(runes) <= targetWidth {
+		return string(runes)
+	}
+	head := (targetWidth - 1) / 2
+	tail := targetWidth - 1 - head
+	return string(runes[:head]) + "…" + string(runes[len(runes)-tail:])
 }
 
-func formatWSClose(path string, duration time.Duration, bytes int64) string {
-	return fmt.Sprintf("\r  %-4s %-53s -    CLOSED (%s, %s)\r\n", "WS", truncatePath(path), formatDurationHuman(duration), formatBytes(bytes))
+func methodColor(method string) string {
+	switch method {
+	case "GET":
+		return colorGreen
+	case "POST":
+		return colorYellow
+	case "PUT":
+		return colorBlue
+	case "PATCH":
+		return colorMagenta
+	case "DELETE":
+		return colorRed
+	case "WS":
+		return colorCyan
+	default:
+		return colorDim
+	}
+}
+
+func statusColor(status int) string {
+	switch {
+	case status >= 500:
+		return colorBold + colorRed
+	case status >= 400:
+		return colorBold + colorYellow
+	case status >= 300:
+		return colorBold + colorCyan
+	default:
+		return colorBold + colorGreen
+	}
+}
+
+func latencyColor(d time.Duration) string {
+	switch {
+	case d >= 5*time.Second:
+		return colorRed
+	case d >= time.Second:
+		return colorYellow
+	default:
+		return ""
+	}
 }
 
 func formatLatency(d time.Duration) string {
-	if d < time.Millisecond {
-		us := d.Microseconds()
-		if us == 0 {
-			return "<1us"
-		}
-		return fmt.Sprintf("%dus", us)
+	switch {
+	case d < time.Millisecond:
+		return "<1ms"
+	case d < time.Second:
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	default:
+		return fmt.Sprintf("%.1fs", d.Seconds())
 	}
-	return fmt.Sprintf("%dms", d.Milliseconds())
 }
 
-func formatDurationHuman(d time.Duration) string {
+// FormatDuration formats a duration for people, e.g. "2m31s" or "1h5m".
+func FormatDuration(d time.Duration) string {
 	d = d.Round(time.Second)
 	if d < time.Minute {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
@@ -140,17 +318,29 @@ func formatDurationHuman(d time.Duration) string {
 	return fmt.Sprintf("%dh%dm", h, m)
 }
 
+// FormatBytes formats a byte count for people, e.g. "1.2 MB".
+func FormatBytes(b int64) string {
+	return formatBytes(b)
+}
+
 func formatBytes(b int64) string {
 	switch {
 	case b < 1024:
-		return fmt.Sprintf("%dB", b)
+		return fmt.Sprintf("%d B", b)
 	case b < 1024*1024:
-		return fmt.Sprintf("%.1fKB", float64(b)/1024)
+		return fmt.Sprintf("%.1f KB", float64(b)/1024)
 	case b < 1024*1024*1024:
-		return fmt.Sprintf("%.1fMB", float64(b)/(1024*1024))
+		return fmt.Sprintf("%.1f MB", float64(b)/(1024*1024))
 	default:
-		return fmt.Sprintf("%.1fGB", float64(b)/(1024*1024*1024))
+		return fmt.Sprintf("%.1f GB", float64(b)/(1024*1024*1024))
 	}
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return fmt.Sprintf("%d %ss", n, word)
 }
 
 func sanitizeTerminalText(s string) string {
