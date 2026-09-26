@@ -177,6 +177,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 	// sent right after the upgrade request.
 	clientConn := &bufferedConn{Conn: hijacked, r: brw.Reader}
 
+	// The upgrade request is written as-is, so give the app the same
+	// forwarding headers as proxied requests
+	setForwardedHeaders(r.Header, r, client)
 	if err := r.Write(backendConn); err != nil {
 		log.Printf("WebSocket request write error for %s: %v", sub, err)
 		return

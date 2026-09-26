@@ -613,3 +613,25 @@ func TestE2E_OnPremProxyVisitorResolved(t *testing.T) {
 		t.Errorf("app saw %q, want %q", rec.Body.String(), want)
 	}
 }
+
+func TestE2E_WebSocketForwardedHeaders(t *testing.T) {
+	seen := make(chan string, 1)
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- fmt.Sprintf("for=%s host=%s proto=%s cf=%s", r.Header.Get("X-Forwarded-For"),
+			r.Header.Get("X-Forwarded-Host"), r.Header.Get("X-Forwarded-Proto"), r.Header.Get("CF-Connecting-IP"))
+		echoWebSocketBackend(w, r)
+	}))
+
+	conn, err := net.Dial("tcp", tt.public.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial() error: %v", err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	fmt.Fprintf(conn, "GET /ws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"+
+		"X-Forwarded-For: 6.6.6.6\r\nCF-Connecting-IP: 6.6.6.6\r\n\r\n", tt.host())
+
+	if got, want := <-seen, "for=127.0.0.1 host="+tt.host()+" proto=http cf="; got != want {
+		t.Errorf("app saw %q on the upgrade, want %q", got, want)
+	}
+}
