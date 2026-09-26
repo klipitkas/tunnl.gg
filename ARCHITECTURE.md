@@ -330,11 +330,14 @@ Browser                    Server                         Client
     - Inactivity timeout: 2 hours
     - Max lifetime: 24 hours (regardless of activity)
 
-11. **IP Spoofing Prevention**: X-Forwarded-For header is not trusted (service runs directly on internet).
+11. **IP Spoofing Prevention**: Visitor-supplied `X-Forwarded-*` headers are replaced, not trusted (service runs directly on internet).
+    Backends receive `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto` set by the server.
 
 12. **Phishing Protection**: Browser requests show interstitial warning page (cookie-based, 1 day).
 
-13. **Security Headers**: All responses include `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy`.
+13. **Security Headers**: Server-generated responses (errors, redirects) include `X-Content-Type-Options`, `X-Frame-Options: DENY`,
+    and `Referrer-Policy`. Proxied responses keep the app's own headers; `X-Content-Type-Options` and `Referrer-Policy`
+    are added only when the app omits them, and framing is left to the app so it can be embedded.
 
 14. **Stats Endpoint**: Only accessible from localhost (127.0.0.1, ::1).
 

@@ -96,16 +96,29 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer stopDeadlines()
 	sw := &statusCaptureWriter{ResponseWriter: dw}
 
+	// The tunneled app decides its own response headers
+	for name := range securityHeaders {
+		w.Header().Del(name)
+	}
+
 	proxy := &httputil.ReverseProxy{
-		Director: func(req *http.Request) {
+		Rewrite: func(pr *httputil.ProxyRequest) {
 			// The tunnel's transport sends every request over SSH, so the
 			// URL host only needs to be valid
-			req.URL.Scheme = "http"
-			req.URL.Host = r.Host
-			req.Host = r.Host
+			pr.Out.URL.Scheme = "http"
+			pr.Out.URL.Host = pr.In.Host
+			pr.Out.Host = pr.In.Host
+			// Replaces any X-Forwarded-* headers sent by the visitor
+			pr.SetXForwarded()
 		},
 		Transport: tun.Transport(),
 		ModifyResponse: func(resp *http.Response) error {
+			for name, value := range proxiedDefaultHeaders {
+				if resp.Header.Get(name) == "" {
+					resp.Header.Set(name, value)
+				}
+			}
+
 			// Enforce response body size limit
 			if resp.ContentLength > config.MaxResponseBodySize {
 				return fmt.Errorf("%w: %d bytes (max %d)", errResponseTooLarge, resp.ContentLength, config.MaxResponseBodySize)
@@ -119,6 +132,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("Proxy error for %s: %v", sub, err)
+			setSecurityHeaders(w)
 			if errors.Is(err, errResponseTooLarge) {
 				http.Error(w, "Response Too Large", http.StatusBadGateway)
 				return
@@ -240,11 +254,25 @@ func copyWithLimits(dst, src net.Conn, maxBytes int64, idleTimeout time.Duration
 	}
 }
 
+// securityHeaders are set on responses the server generates itself, such as
+// errors and redirects.
+var securityHeaders = map[string]string{
+	"X-Content-Type-Options": "nosniff",
+	"X-Frame-Options":        "DENY",
+	"Referrer-Policy":        "strict-origin-when-cross-origin",
+}
+
+// proxiedDefaultHeaders are added to proxied responses only when the tunneled
+// app doesn't set them. Framing is left to the app, so it can be embedded.
+var proxiedDefaultHeaders = map[string]string{
+	"X-Content-Type-Options": "nosniff",
+	"Referrer-Policy":        "strict-origin-when-cross-origin",
+}
+
 func setSecurityHeaders(w http.ResponseWriter) {
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("X-XSS-Protection", "1; mode=block")
-	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	for name, value := range securityHeaders {
+		w.Header().Set(name, value)
+	}
 }
 
 func isBrowserRequest(r *http.Request) bool {

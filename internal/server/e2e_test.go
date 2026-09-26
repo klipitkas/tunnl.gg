@@ -466,3 +466,68 @@ func TestE2E_ConcurrentHandshakesPerIPLimited(t *testing.T) {
 		return err == nil
 	})
 }
+
+func TestE2E_ProxiedResponseKeepsAppHeaders(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/embeddable" {
+			w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+		}
+	}))
+
+	resp := tt.get(t, "/embeddable")
+	if got := resp.Header.Values("X-Frame-Options"); len(got) != 1 || got[0] != "SAMEORIGIN" {
+		t.Errorf("X-Frame-Options = %q, want only the app's SAMEORIGIN", got)
+	}
+	if got := resp.Header.Values("X-Content-Type-Options"); len(got) != 1 {
+		t.Errorf("X-Content-Type-Options = %q, want a single value", got)
+	}
+
+	resp = tt.get(t, "/plain")
+	if got := resp.Header.Get("X-Frame-Options"); got != "" {
+		t.Errorf("X-Frame-Options = %q, want none so the app can be embedded", got)
+	}
+	if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want default nosniff", got)
+	}
+	if got := resp.Header.Get("X-Xss-Protection"); got != "" {
+		t.Errorf("X-XSS-Protection = %q, want none (deprecated)", got)
+	}
+}
+
+func TestE2E_ServerErrorsKeepSecurityHeaders(t *testing.T) {
+	tt := startTestTunnel(t, http.NotFoundHandler())
+
+	req, _ := http.NewRequest(http.MethodGet, tt.public.URL+"/", nil)
+	req.Host = "calm-eagle-00000000." + config.DefaultDomain // no such tunnel
+	resp, err := tt.public.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("X-Frame-Options on server error = %q, want DENY", got)
+	}
+}
+
+func TestE2E_ForwardedHeaders(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "for=%s host=%s proto=%s",
+			r.Header.Get("X-Forwarded-For"), r.Header.Get("X-Forwarded-Host"), r.Header.Get("X-Forwarded-Proto"))
+	}))
+
+	req, _ := http.NewRequest(http.MethodGet, tt.public.URL+"/", nil)
+	req.Host = tt.host()
+	req.Header.Set("X-Forwarded-For", "203.0.113.66") // spoofed by the visitor
+	resp, err := tt.public.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	// The test server is plain HTTP; production terminates TLS, giving https
+	if want := "for=127.0.0.1 host=" + tt.host() + " proto=http"; string(body) != want {
+		t.Errorf("backend saw %q, want %q", body, want)
+	}
+}
