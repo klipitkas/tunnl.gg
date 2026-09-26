@@ -110,16 +110,6 @@ func (s *Server) SetTrustedProxies(r *clientip.Resolver) {
 	s.clientIPs = r
 }
 
-// Domain returns the configured domain
-func (s *Server) Domain() string {
-	return s.domain
-}
-
-// SSHConfig returns the SSH server configuration
-func (s *Server) SSHConfig() *ssh.ServerConfig {
-	return s.sshConfig
-}
-
 // loadOrGenerateHostKey returns the SSH host key and its PEM encoding,
 // generating the key first if it doesn't exist.
 func loadOrGenerateHostKey(path string) (ssh.Signer, []byte, error) {
