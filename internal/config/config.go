@@ -14,9 +14,14 @@ const (
 	// SSH handshake timeout
 	SSHHandshakeTimeout = 30 * time.Second
 
-	// HTTP rate limiting per tunnel
-	RequestsPerSecond = 10 // requests per second per tunnel
-	BurstSize         = 20 // max burst size
+	// HTTP rate limiting. Exceeding a limit only returns 429 to the visitor; it
+	// never penalizes the tunnel owner, since visitors control the request rate.
+	// Bursts are sized for dev servers that load a page as hundreds of modules.
+	VisitorRequestsPerSecond = 25   // per visitor IP (IPv6 grouped by /64) per tunnel
+	VisitorBurstSize         = 200  // max burst per visitor
+	RequestsPerSecond        = 50   // per tunnel, across all visitors
+	BurstSize                = 400  // max burst per tunnel
+	MaxTrackedVisitors       = 1024 // visitors tracked per tunnel; extras share one bucket
 
 	// Request size limits
 	MaxRequestBodySize = 128 * 1024 * 1024 // 128MB
@@ -27,7 +32,7 @@ const (
 
 	// IP blocking
 	BlockDuration          = 1 * time.Hour // how long to block abusive IPs
-	RateLimitViolationsMax = 10            // violations before auto-block
+	RateLimitViolationsMax = 10            // SSH connection rate violations before auto-block
 
 	// Tunnel lifetime
 	MaxTunnelLifetime = 24 * time.Hour // max tunnel duration regardless of activity

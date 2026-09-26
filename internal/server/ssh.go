@@ -112,7 +112,6 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 					bindAddr = fwdReq.BindAddr
 					bindPort = fwdReq.BindPort
 					tun = s.RegisterTunnel(sub, tunnelListener, bindAddr, bindPort, clientIP)
-					tun.SetSSHConn(sshConn)
 					registered = true
 					close(tunnelRegistered)
 					req.Reply(true, nil)

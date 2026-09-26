@@ -2,11 +2,12 @@ package tunnel
 
 import (
 	"bytes"
-	"errors"
+	"fmt"
 	"net"
-	"sync"
 	"testing"
 	"time"
+
+	"tunnl.gg/internal/config"
 )
 
 func newTestTunnel(t *testing.T) *Tunnel {
@@ -72,22 +73,6 @@ func TestTimeRemaining(t *testing.T) {
 	}
 }
 
-func TestRecordRateLimitHit(t *testing.T) {
-	tun := newTestTunnel(t)
-
-	// Should not trigger kill until threshold
-	for i := 0; i < 9; i++ {
-		if tun.RecordRateLimitHit() {
-			t.Fatalf("RecordRateLimitHit() returned true on hit %d, want false", i+1)
-		}
-	}
-
-	// 10th hit should trigger kill
-	if !tun.RecordRateLimitHit() {
-		t.Error("RecordRateLimitHit() should return true on 10th violation")
-	}
-}
-
 func TestTransport(t *testing.T) {
 	tun := newTestTunnel(t)
 	tr := tun.Transport()
@@ -96,19 +81,58 @@ func TestTransport(t *testing.T) {
 	}
 }
 
-func TestAllowRequest(t *testing.T) {
+func TestAllowRequest_PerVisitorLimit(t *testing.T) {
 	tun := newTestTunnel(t)
 
-	// Should allow requests up to burst size
-	for i := 0; i < 20; i++ {
-		if !tun.AllowRequest() {
-			t.Fatalf("AllowRequest() returned false on request %d (within burst)", i+1)
+	for i := 0; i < config.VisitorBurstSize; i++ {
+		if !tun.AllowRequest("198.51.100.1") {
+			t.Fatalf("AllowRequest() returned false on request %d (within visitor burst)", i+1)
+		}
+	}
+	if tun.AllowRequest("198.51.100.1") {
+		t.Error("AllowRequest() should return false after visitor burst exhausted")
+	}
+
+	// Another visitor has their own budget
+	if !tun.AllowRequest("198.51.100.2") {
+		t.Error("throttling one visitor should not affect another")
+	}
+}
+
+func TestAllowRequest_TunnelWideLimit(t *testing.T) {
+	tun := newTestTunnel(t)
+
+	allowed := 0
+	for v := 0; allowed < config.BurstSize; v++ {
+		visitor := fmt.Sprintf("198.51.100.%d", v)
+		for i := 0; i < config.VisitorBurstSize && allowed < config.BurstSize; i++ {
+			if !tun.AllowRequest(visitor) {
+				t.Fatalf("AllowRequest() returned false after %d requests (within tunnel burst)", allowed)
+			}
+			allowed++
 		}
 	}
 
-	// Should deny after burst exhausted
-	if tun.AllowRequest() {
-		t.Error("AllowRequest() should return false after burst exhausted")
+	if tun.AllowRequest("203.0.113.1") {
+		t.Error("AllowRequest() should return false for a new visitor after tunnel burst exhausted")
+	}
+}
+
+func TestAllowRequest_ThrottledVisitorDoesNotDrainTunnelBudget(t *testing.T) {
+	tun := newTestTunnel(t)
+
+	// One visitor hammers the tunnel far beyond its own limit
+	for i := 0; i < config.BurstSize*10; i++ {
+		tun.AllowRequest("198.51.100.1")
+	}
+
+	// Only the requests allowed by the visitor limit consumed tunnel budget
+	remaining := config.BurstSize - config.VisitorBurstSize
+	for i := 0; i < remaining; i++ {
+		visitor := fmt.Sprintf("203.0.113.%d", i/config.VisitorBurstSize)
+		if !tun.AllowRequest(visitor) {
+			t.Fatalf("AllowRequest() returned false on request %d; throttled visitor drained tunnel budget", i+1)
+		}
 	}
 }
 
@@ -126,67 +150,6 @@ func TestIsMaxLifetimeExceeded(t *testing.T) {
 	if !tun.IsMaxLifetimeExceeded() {
 		t.Error("tunnel past max lifetime should report exceeded")
 	}
-}
-
-type mockSSHConn struct {
-	mu     sync.Mutex
-	closed bool
-}
-
-func (m *mockSSHConn) Close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return errors.New("already closed")
-	}
-	m.closed = true
-	return nil
-}
-
-func (m *mockSSHConn) isClosed() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.closed
-}
-
-func TestSetSSHConn(t *testing.T) {
-	tun := newTestTunnel(t)
-	mock := &mockSSHConn{}
-	tun.SetSSHConn(mock)
-
-	tun.mu.Lock()
-	got := tun.sshConn
-	tun.mu.Unlock()
-
-	if got != mock {
-		t.Error("SetSSHConn() did not set sshConn")
-	}
-}
-
-func TestCloseSSH(t *testing.T) {
-	tun := newTestTunnel(t)
-	mock := &mockSSHConn{}
-	tun.SetSSHConn(mock)
-
-	tun.CloseSSH()
-
-	if !mock.isClosed() {
-		t.Error("CloseSSH() did not close the SSH connection")
-	}
-
-	// sshConn should be nil after close (prevents double-close)
-	tun.mu.Lock()
-	got := tun.sshConn
-	tun.mu.Unlock()
-	if got != nil {
-		t.Error("CloseSSH() should nil out sshConn")
-	}
-}
-
-func TestCloseSSH_Nil(t *testing.T) {
-	tun := newTestTunnel(t)
-	// Should not panic when no SSH connection is set
-	tun.CloseSSH()
 }
 
 func TestSetLogger(t *testing.T) {

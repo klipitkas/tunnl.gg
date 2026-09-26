@@ -25,7 +25,8 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 |-------|-------|-------------|
 | Tunnels per IP | 3 | Max concurrent tunnels per IP address |
 | Total tunnels | 1000 | Server-wide tunnel limit |
-| Requests per tunnel | 10/s (burst 20) | Token bucket rate limiting |
+| Requests per visitor | 25/s (burst 200) | Per visitor IP (IPv6 by /64), per tunnel; excess gets 429 |
+| Requests per tunnel | 50/s (burst 400) | Across all visitors; excess gets 429 |
 | Request body size | 128 MB | Max upload size |
 | Response body size | 128 MB | Max response size |
 | WebSocket transfer | 1 GB per direction | Max data per WebSocket connection |
@@ -35,7 +36,7 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 | Inactivity timeout | 2 hours | Tunnel closes after inactivity |
 | Max tunnel lifetime | 24 hours | Absolute tunnel lifetime limit |
 | Block duration | 1 hour | Temporary IP block after abuse |
-| Violations before block | 10 | Rate limit violations before tunnel kill + IP block |
+| Violations before block | 10 | SSH connection rate violations before IP block |
 
 ## Project Structure
 

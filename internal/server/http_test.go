@@ -434,3 +434,75 @@ func TestRedirectToWarningPage(t *testing.T) {
 		t.Errorf("Location missing subdomain param: %q", loc)
 	}
 }
+
+func TestVisitorKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		remoteAddr string
+		want       string
+	}{
+		{"ipv4", "192.0.2.1:1234", "192.0.2.1"},
+		{"ipv4-mapped ipv6", "[::ffff:192.0.2.1]:1234", "192.0.2.1"},
+		{"ipv6 grouped by /64", "[2001:db8:1:2:3:4:5:6]:443", "2001:db8:1:2::/64"},
+		{"same /64 same key", "[2001:db8:1:2:ffff:ffff:ffff:ffff]:443", "2001:db8:1:2::/64"},
+		{"no port", "192.0.2.1", "192.0.2.1"},
+		{"unparseable", "garbage", "garbage"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := visitorKey(tt.remoteAddr); got != tt.want {
+				t.Errorf("visitorKey(%q) = %q, want %q", tt.remoteAddr, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestServeHTTP_RateLimitThrottlesVisitorWithoutPenalizingOwner(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Stand-in for the tunnel owner's local service
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error: %v", err)
+	}
+	go http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	const (
+		sub     = "happy-tiger-0123abcd"
+		ownerIP = "192.0.2.10"
+	)
+	srv.RegisterTunnel(sub, ln, "localhost", 80, ownerIP)
+	t.Cleanup(func() { srv.RemoveTunnel(sub) })
+
+	request := func(remoteAddr string) int {
+		req := httptest.NewRequest(http.MethodGet, "https://"+sub+"."+config.DefaultDomain+"/", nil)
+		req.RemoteAddr = remoteAddr
+		req.Header.Set("User-Agent", "curl/8.0")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	limited := 0
+	for i := 0; i < config.VisitorBurstSize*2; i++ {
+		if request("198.51.100.7:4321") == http.StatusTooManyRequests {
+			limited++
+		}
+	}
+	if limited == 0 {
+		t.Fatal("expected the flooding visitor to be rate limited")
+	}
+
+	if srv.GetTunnel(sub) == nil {
+		t.Error("tunnel was removed because of visitor traffic")
+	}
+	if !srv.abuseTracker.GetBlockExpiry(ownerIP).IsZero() {
+		t.Error("tunnel owner IP was blocked because of visitor traffic")
+	}
+	if code := request("203.0.113.9:4321"); code != http.StatusOK {
+		t.Errorf("other visitor got status %d, want %d", code, http.StatusOK)
+	}
+}

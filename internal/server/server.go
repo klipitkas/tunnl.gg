@@ -155,11 +155,6 @@ func (s *Server) CheckAndReserveConnection(clientIP string) error {
 	return nil
 }
 
-// BlockIP blocks an IP address
-func (s *Server) BlockIP(ip string) {
-	s.abuseTracker.BlockIP(ip)
-}
-
 // DecrementIPConnection decrements the connection count for an IP
 func (s *Server) DecrementIPConnection(clientIP string) {
 	s.mu.Lock()

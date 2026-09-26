@@ -115,7 +115,7 @@ Listens on port 443 with pre-configured TLS certificates.
 1. Extract subdomain from `Host` header (e.g., `happy-tiger-a1b2c3d4.tunnl.gg`)
 2. Validate subdomain format (adjective-noun-hex pattern)
 3. Look up tunnel in registry
-4. Check rate limit (10 req/s per tunnel)
+4. Check rate limits (25 req/s per visitor IP, 50 req/s per tunnel); excess gets 429
 5. Touch tunnel to reset inactivity timer
 6. Show interstitial warning for browser requests (first visit)
 7. Handle WebSocket upgrade if requested
@@ -180,12 +180,11 @@ type Tunnel struct {
     LastActive    time.Time         // For inactivity timeout
     BindAddr      string            // Client's requested bind address
     BindPort      uint32            // Client's requested bind port
-    ClientIP      string            // SSH client IP (for blocking on abuse)
-    mu            sync.Mutex
-    rateLimiter   *RateLimiter      // Per-tunnel rate limiting
-    sshConn       SSHCloser         // Reference to SSH connection for forced closure
-    rateLimitHits int               // Count of rate limit violations
-    transport     *http.Transport   // Reusable HTTP transport for proxying
+    ClientIP       string            // SSH client IP that created the tunnel
+    mu             sync.Mutex
+    rateLimiter    *RateLimiter      // Tunnel-wide rate limit across all visitors
+    visitorLimiter *KeyedRateLimiter // Per-visitor rate limit
+    transport      *http.Transport   // Reusable HTTP transport for proxying
 }
 ```
 
@@ -204,17 +203,16 @@ Generates memorable, random subdomains.
 
 ### 8. Rate Limiter (`internal/tunnel/ratelimiter.go`)
 
-Token bucket algorithm for per-tunnel request limiting.
+Token bucket rate limiting for HTTP requests. Each tunnel has two limiters:
 
-```go
-type RateLimiter struct {
-    tokens     float64  // Current tokens
-    maxTokens  float64  // Burst size (20)
-    refillRate float64  // Tokens per second (10)
-    lastRefill time.Time
-    mu         sync.Mutex
-}
-```
+- `KeyedRateLimiter`: one bucket per visitor IP (IPv6 grouped by /64), 25 req/s with a burst of 200.
+  At most 1024 visitors are tracked per tunnel; fully refilled buckets are pruned when the map is full,
+  and any visitors beyond the cap share a single overflow bucket.
+- `RateLimiter`: one bucket for the whole tunnel, 50 req/s with a burst of 400.
+
+The visitor limit is checked first, so a throttled visitor cannot drain the tunnel-wide budget.
+Exceeding either limit only returns `429 Too Many Requests` to the visitor. The tunnel owner is never
+penalized, because visitors control the request rate.
 
 ### 9. Inactivity Monitor
 
@@ -254,8 +252,7 @@ type AbuseTracker struct {
 **Features:**
 
 - **Connection rate limiting**: Sliding window (1 minute) tracking new SSH connections per IP
-- **Per-tunnel rate limiting**: Tunnels exceeding HTTP rate limits are killed and their SSH client IP is blocked
-- **Auto-blocking**: IPs exceeding rate limits are blocked for 1 hour
+- **Auto-blocking**: IPs repeatedly exceeding the SSH connection rate limit are blocked for 1 hour
 - **Block notification**: Users see block expiry time when attempting to connect
 - **Connection closure**: All SSH connections (and their tunnels) are forcibly closed when an IP is blocked
 - **Memory cleanup**: Background goroutine removes stale entries every 5 minutes
@@ -305,13 +302,14 @@ Browser                    Server                         Client
 
 7. **Rate Limiting**:
    - Per IP: Max 3 concurrent tunnels
-   - Per tunnel: 10 requests/second, 20 burst
+   - Per visitor per tunnel: 25 requests/second, 200 burst
+   - Per tunnel: 50 requests/second, 400 burst
    - Per IP: Max 10 new connections per minute
    - Global: Max 1000 total tunnels
 
 7. **Abuse Protection**:
-   - Tunnels exceeding HTTP rate limits 10 times are killed and SSH client IP is blocked (1-hour block)
-   - SSH connection rate limiting: 10 connections/minute per IP
+   - HTTP rate limits only throttle visitors (429); visitor traffic never kills a tunnel or blocks its owner
+   - SSH connection rate limiting: 10 connections/minute per IP; 10 violations block the IP for 1 hour
    - All SSH connections forcibly closed when IP is blocked (tunnels cleaned up automatically)
    - Users notified of block expiry time
    - Memory-safe cleanup of tracking data

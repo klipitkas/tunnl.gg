@@ -52,13 +52,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !tun.AllowRequest() {
-		// Record violation and kill tunnel + block SSH client IP if too many violations
-		if tun.RecordRateLimitHit() {
-			log.Printf("Tunnel %s killed due to rate limit abuse, blocking SSH client %s", sub, tun.ClientIP)
-			s.BlockIP(tun.ClientIP)
-			tun.CloseSSH()
-		}
+	// Throttle only the visitor: the tunnel owner doesn't control who sends
+	// traffic to their URL, so exceeding the limit must not affect the tunnel.
+	if !tun.AllowRequest(visitorKey(r.RemoteAddr)) {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
@@ -244,6 +240,24 @@ func (s *Server) redirectToWarningPage(w http.ResponseWriter, r *http.Request, s
 func isWebSocketRequest(r *http.Request) bool {
 	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket") &&
 		strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
+}
+
+// visitorKey returns the rate-limit key for a request's remote address. IPv6
+// addresses are grouped by /64, since a single client typically controls a
+// whole /64 and could otherwise rotate addresses to evade the limit.
+func visitorKey(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return host
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4.String()
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }
 
 // stripPort removes the port from a host string (e.g., "example.com:443" -> "example.com")
