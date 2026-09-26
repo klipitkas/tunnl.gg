@@ -135,7 +135,7 @@ ssh -p 2222 user@your-server
 ### Build from Source
 
 ```bash
-# Requires Go 1.24+
+# Requires Go 1.26+
 git clone https://github.com/klipitkas/tunnl.gg.git
 cd tunnl.gg
 
