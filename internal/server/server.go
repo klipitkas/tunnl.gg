@@ -6,7 +6,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"sync"
 	"time"
@@ -189,14 +188,14 @@ func (s *Server) DecrementIPConnection(clientIP string) {
 // RegisterTunnel registers a new tunnel under a subdomain reserved with
 // ReserveSubdomain. It returns nil if the reservation has already been
 // released, so a late registration can't outlive its connection's cleanup.
-func (s *Server) RegisterTunnel(sub string, listener net.Listener, bindAddr string, bindPort uint32, clientIP string) *tunnel.Tunnel {
+func (s *Server) RegisterTunnel(sub string, opener tunnel.ChannelOpener, bindAddr string, bindPort uint32, clientIP string) *tunnel.Tunnel {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, reserved := s.reservedSubs[sub]; !reserved {
 		return nil
 	}
-	t := tunnel.New(sub, listener, bindAddr, bindPort, clientIP)
+	t := tunnel.New(sub, opener, bindAddr, bindPort, clientIP)
 	delete(s.reservedSubs, sub)
 	s.tunnels[sub] = t
 	return t

@@ -2,7 +2,6 @@ package server
 
 import (
 	"fmt"
-	"net"
 	"testing"
 
 	"tunnl.gg/internal/config"
@@ -51,11 +50,6 @@ func TestReserveSubdomain_SkipsReservedSubdomains(t *testing.T) {
 
 func TestRegisterTunnel_RequiresReservation(t *testing.T) {
 	s := newTestServer(t)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen() error: %v", err)
-	}
-	defer ln.Close()
 
 	sub, err := s.ReserveSubdomain()
 	if err != nil {
@@ -64,7 +58,7 @@ func TestRegisterTunnel_RequiresReservation(t *testing.T) {
 	// The connection gave up waiting and cleaned up before registering
 	s.RemoveTunnel(sub)
 
-	if tun := s.RegisterTunnel(sub, ln, "localhost", 80, "192.0.2.1"); tun != nil {
+	if tun := s.RegisterTunnel(sub, nil, "localhost", 80, "192.0.2.1"); tun != nil {
 		t.Error("RegisterTunnel() should refuse a subdomain whose reservation was released")
 	}
 	if s.GetTunnel(sub) != nil {

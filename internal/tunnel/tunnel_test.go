@@ -3,7 +3,6 @@ package tunnel
 import (
 	"bytes"
 	"fmt"
-	"net"
 	"strings"
 	"testing"
 	"time"
@@ -13,26 +12,7 @@ import (
 
 func newTestTunnel(t *testing.T) *Tunnel {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to create test listener: %v", err)
-	}
-	t.Cleanup(func() { ln.Close() })
-	return New("test-sub-00000000", ln, "127.0.0.1", 8080, "127.0.0.1")
-}
-
-func TestTouch_ResetsInactivity(t *testing.T) {
-	tun := newTestTunnel(t)
-
-	tun.mu.Lock()
-	tun.LastActive = time.Now().Add(-3 * time.Hour)
-	tun.mu.Unlock()
-
-	tun.Touch()
-
-	if tun.IsExpired() {
-		t.Error("Touch() should reset the inactivity timer")
-	}
+	return New("test-sub-00000000", &fakeOpener{}, "127.0.0.1", 8080, "127.0.0.1")
 }
 
 func TestIsExpired_NotWhileRequestInFlight(t *testing.T) {
@@ -173,20 +153,5 @@ func TestClose_FlushesAndDetachesLogger(t *testing.T) {
 	}
 	if tun.Logger() != nil {
 		t.Error("Close() should detach the logger so requests stop logging to a closed session")
-	}
-}
-
-func TestClose(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to create listener: %v", err)
-	}
-	tun := New("test-sub-00000000", ln, "127.0.0.1", 8080, "127.0.0.1")
-	tun.Close()
-
-	// Listener should be closed — Accept should fail
-	_, err = ln.Accept()
-	if err == nil {
-		t.Error("Close() should close the listener")
 	}
 }

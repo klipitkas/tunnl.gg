@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"time"
@@ -17,13 +16,6 @@ import (
 type tcpipForwardRequest struct {
 	BindAddr string
 	BindPort uint32
-}
-
-type forwardedTCPPayload struct {
-	Addr       string
-	Port       uint32
-	OriginAddr string
-	OriginPort uint32
 }
 
 // HandleSSHConnection handles a new SSH connection
@@ -81,15 +73,6 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	defer s.RemoveTunnel(sub)
 	log.Printf("New SSH connection from %s, assigned subdomain: %s", sshConn.RemoteAddr(), sub)
 
-	tunnelListener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		log.Printf("Failed to create tunnel listener: %v", err)
-		return
-	}
-	// Ensure listener is closed on early return (before tunnel registration)
-	// This is safe even after tunnel registration since net.Listener.Close() is idempotent
-	defer tunnelListener.Close()
-
 	var bindAddr string
 	var bindPort uint32
 	tunnelRegistered := make(chan struct{})
@@ -120,7 +103,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 					}
 					bindAddr = fwdReq.BindAddr
 					bindPort = fwdReq.BindPort
-					t := s.RegisterTunnel(sub, tunnelListener, bindAddr, bindPort, clientIP)
+					t := s.RegisterTunnel(sub, sshConn, bindAddr, bindPort, clientIP)
 					if t == nil {
 						// The connection is already being cleaned up
 						req.Reply(false, nil)
@@ -224,18 +207,6 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	tun.SetLogger(logger)
 	defer logger.Close()
 
-	// Accept connections on the tunnel listener
-	go func() {
-		for {
-			tcpConn, err := tunnelListener.Accept()
-			if err != nil {
-				return
-			}
-			tun.Touch()
-			go s.forwardToSSH(sshConn, tcpConn, tun)
-		}
-	}()
-
 	// Handle session requests
 	go func(ch ssh.Channel, reqs <-chan *ssh.Request) {
 		for req := range reqs {
@@ -332,48 +303,6 @@ func (s *Server) sendErrorAndClose(sshConn *ssh.ServerConn, chans <-chan ssh.New
 		// Client didn't send session channel in time
 		return
 	}
-}
-
-func (s *Server) forwardToSSH(sshConn *ssh.ServerConn, tcpConn net.Conn, tun *tunnel.Tunnel) {
-	defer tcpConn.Close()
-
-	var originAddr string
-	var originPort uint32
-	if tcpAddr, ok := tcpConn.RemoteAddr().(*net.TCPAddr); ok {
-		originAddr = tcpAddr.IP.String()
-		originPort = uint32(tcpAddr.Port)
-	} else {
-		originAddr = "0.0.0.0"
-		originPort = 0
-	}
-
-	channel, reqs, err := sshConn.OpenChannel("forwarded-tcpip", ssh.Marshal(&forwardedTCPPayload{
-		Addr:       tun.BindAddr,
-		Port:       tun.BindPort,
-		OriginAddr: originAddr,
-		OriginPort: originPort,
-	}))
-	if err != nil {
-		log.Printf("Failed to open forwarded-tcpip channel: %v", err)
-		return
-	}
-	defer channel.Close()
-
-	go ssh.DiscardRequests(reqs)
-
-	// Copy data bidirectionally. When one direction completes (or errors),
-	// close the write side to signal the other goroutine to finish.
-	done := make(chan struct{})
-	go func() {
-		io.Copy(channel, tcpConn)
-		// Signal SSH channel we're done sending
-		channel.CloseWrite()
-	}()
-	go func() {
-		defer close(done)
-		io.Copy(tcpConn, channel)
-	}()
-	<-done
 }
 
 // formatDuration formats a duration as a human-readable string (e.g., "2h", "45m")

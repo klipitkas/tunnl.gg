@@ -26,7 +26,7 @@ Tunnl.gg is a minimal SSH tunneling service that exposes local applications to t
 │  │   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  │    │
 │  │   │happy-tiger-      │  │calm-eagle-       │  │swift-wolf-       │  │    │
 │  │   │a1b2c3d4          │  │e5f6a7b8          │  │d9e0f1a2          │  │    │
-│  │   │Listener:X        │  │Listener:Y        │  │Listener:Z        │  │    │
+│  │   │SSH conn          │  │SSH conn          │  │SSH conn          │  │    │
 │  │   │RateLimiter       │  │RateLimiter       │  │RateLimiter       │  │    │
 │  │   └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘  │    │
 │  └──────────┼─────────────────┼─────────────────┼──────────────────────┘    │
@@ -78,10 +78,9 @@ Listens on port 22 (configurable) and handles remote port forwarding requests.
 2. Server drops blocked IPs and enforces handshake concurrency limits, then performs the SSH handshake with a 30s timeout (no auth required)
 3. Server sets `TCP_NODELAY` for low latency
 4. Server generates memorable subdomain (e.g., `happy-tiger-a1b2c3d4`)
-5. Server creates internal TCP listener for tunnel
-6. Server registers tunnel in registry
-7. Server sends URL to client via session channel
-8. Server waits for `forwarded-tcpip` channel requests
+5. Server registers tunnel in registry when the client sends its `tcpip-forward` request
+6. Server sends URL to client via session channel
+7. For each proxied connection, the server opens a `forwarded-tcpip` channel to the client
 
 **Key structures:**
 
@@ -119,8 +118,7 @@ Listens on port 443 with pre-configured TLS certificates.
 5. Mark the request in flight (the tunnel can't go idle until it finishes)
 6. Show interstitial warning for browser requests (first visit)
 7. Handle WebSocket upgrade if requested
-8. Reverse proxy request to tunnel's internal listener
-9. Internal listener forwards to SSH client via `forwarded-tcpip` channel
+8. Reverse proxy request to the client over a new `forwarded-tcpip` SSH channel (no local listener or socket)
 10. SSH client forwards to local application
 
 ### 4. Stats Server (`internal/server/stats.go`)
@@ -176,7 +174,7 @@ Represents a single active tunnel.
 ```go
 type Tunnel struct {
     Subdomain     string
-    Listener      net.Listener      // Internal listener (127.0.0.1:random)
+    opener        ChannelOpener     // SSH connection used to open forwarded-tcpip channels
     CreatedAt     time.Time         // For max lifetime check
     LastActive    time.Time         // For inactivity timeout
     BindAddr      string            // Client's requested bind address
@@ -274,8 +272,8 @@ Browser                    Server                         Client
    │                         │  2. Validate subdomain       │
    │                         │  3. Check rate limit         │
    │                         │  4. Lookup tunnel            │
-   │                         │  5. Connect to internal      │
-   │                         │     listener                 │
+   │                         │  5. Open SSH channel to      │
+   │                         │     the client               │
    │                         ├─────────────────────────────►│
    │                         │  forwarded-tcpip channel     │
    │                         │                              │

@@ -442,27 +442,11 @@ func TestVisitorKey(t *testing.T) {
 }
 
 func TestServeHTTP_RateLimitThrottlesVisitorWithoutPenalizingOwner(t *testing.T) {
-	srv := newTestServer(t)
-
-	// Stand-in for the tunnel owner's local service
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen() error: %v", err)
-	}
-	go http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-
-	const (
-		sub     = "happy-tiger-0123abcd"
-		ownerIP = "192.0.2.10"
-	)
-	srv.newSubdomain = func() (string, error) { return sub, nil }
-	if _, err := srv.ReserveSubdomain(); err != nil {
-		t.Fatalf("ReserveSubdomain() error: %v", err)
-	}
-	srv.RegisterTunnel(sub, ln, "localhost", 80, ownerIP)
-	t.Cleanup(func() { srv.RemoveTunnel(sub) })
+	srv, sub := tt.srv, tt.sub
+	const ownerIP = "127.0.0.1" // the SSH client's address
 
 	request := func(remoteAddr string) int {
 		req := httptest.NewRequest(http.MethodGet, "https://"+sub+"."+config.DefaultDomain+"/", nil)

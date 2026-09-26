@@ -13,7 +13,7 @@ import (
 // Tunnel represents an active SSH tunnel
 type Tunnel struct {
 	Subdomain      string
-	Listener       net.Listener
+	opener         ChannelOpener // SSH connection to the tunnel client
 	CreatedAt      time.Time
 	LastActive     time.Time
 	inFlight       int // requests and WebSockets currently open
@@ -27,13 +27,12 @@ type Tunnel struct {
 	logger         *RequestLogger    // Async request logger for SSH terminal output
 }
 
-// New creates a new tunnel with the given parameters
-func New(subdomain string, listener net.Listener, bindAddr string, bindPort uint32, clientIP string) *Tunnel {
+// New creates a new tunnel that forwards traffic to the client over opener
+func New(subdomain string, opener ChannelOpener, bindAddr string, bindPort uint32, clientIP string) *Tunnel {
 	now := time.Now()
-	listenerAddr := listener.Addr().String()
-	return &Tunnel{
+	t := &Tunnel{
 		Subdomain:   subdomain,
-		Listener:    listener,
+		opener:      opener,
 		CreatedAt:   now,
 		LastActive:  now,
 		BindAddr:    bindAddr,
@@ -45,21 +44,16 @@ func New(subdomain string, listener net.Listener, bindAddr string, bindPort uint
 			config.VisitorBurstSize,
 			config.MaxTrackedVisitors,
 		),
-		transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return net.DialTimeout("tcp", listenerAddr, 10*time.Second)
-			},
-			MaxIdleConns:    10,
-			IdleConnTimeout: 90 * time.Second,
-		},
 	}
-}
-
-// Touch updates the last active timestamp
-func (t *Tunnel) Touch() {
-	t.mu.Lock()
-	t.LastActive = time.Now()
-	t.mu.Unlock()
+	t.transport = &http.Transport{
+		// Every request goes to the client over an SSH channel, whatever the URL
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return t.Dial(ctx)
+		},
+		MaxIdleConns:    10,
+		IdleConnTimeout: 90 * time.Second,
+	}
+	return t
 }
 
 // BeginRequest marks a request or WebSocket as in flight. The tunnel does not
@@ -120,9 +114,9 @@ func (t *Tunnel) Transport() *http.Transport {
 	return t.transport
 }
 
-// Close closes the tunnel's listener and cleans up the transport and logger
+// Close cleans up the tunnel's transport and logger. Open channels close with
+// the SSH connection.
 func (t *Tunnel) Close() {
-	t.Listener.Close()
 	if t.transport != nil {
 		t.transport.CloseIdleConnections()
 	}

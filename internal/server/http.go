@@ -91,14 +91,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestStart := time.Now()
+	r = r.WithContext(tunnel.WithOrigin(r.Context(), r.RemoteAddr))
 	dw, r, stopDeadlines := newProxyDeadlines(w, r, config.ProxyIdleTimeout)
 	defer stopDeadlines()
 	sw := &statusCaptureWriter{ResponseWriter: dw}
 
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
+			// The tunnel's transport sends every request over SSH, so the
+			// URL host only needs to be valid
 			req.URL.Scheme = "http"
-			req.URL.Host = tun.Listener.Addr().String()
+			req.URL.Host = r.Host
 			req.Host = r.Host
 		},
 		Transport: tun.Transport(),
@@ -132,7 +135,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tunnel.Tunnel, sub string) {
-	backendConn, err := net.DialTimeout("tcp", tun.Listener.Addr().String(), 10*time.Second)
+	backendConn, err := tun.Dial(tunnel.WithOrigin(r.Context(), r.RemoteAddr))
 	if err != nil {
 		log.Printf("WebSocket backend dial error for %s: %v", sub, err)
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
@@ -179,8 +182,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 		defer close(clientDone)
 		backendBytes, _ = copyWithLimits(backendConn, clientConn, config.MaxWebSocketTransfer, config.WebSocketIdleTimeout)
 		// Signal backend we're done sending
-		if tc, ok := backendConn.(*net.TCPConn); ok {
-			tc.CloseWrite()
+		if cw, ok := backendConn.(interface{ CloseWrite() error }); ok {
+			cw.CloseWrite()
 		}
 	}()
 	go func() {
