@@ -156,6 +156,34 @@ make build-all
 
 ### Systemd Service
 
+Run the service as a dedicated unprivileged user. It only needs the
+`CAP_NET_BIND_SERVICE` capability to bind ports 22, 80, and 443.
+
+```bash
+# Service user, binary (root-owned so the service can't replace it),
+# and a certificate directory readable by the service
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin tunnl
+sudo install -d -m 0755 /opt/tunnl
+sudo install -m 0755 bin/tunnl /opt/tunnl/tunnl
+sudo install -d -o root -g tunnl -m 0750 /etc/tunnl
+```
+
+Let's Encrypt keys are only readable by root, so copy them for the service
+with a certbot deploy hook, which also runs after every renewal:
+
+```bash
+sudo tee /etc/letsencrypt/renewal-hooks/deploy/tunnl.sh > /dev/null <<'HOOK'
+#!/bin/sh
+set -e
+LINEAGE="${RENEWED_LINEAGE:-/etc/letsencrypt/live/yourdomain.com}"
+install -o root -g tunnl -m 0644 "$LINEAGE/fullchain.pem" /etc/tunnl/fullchain.pem
+install -o root -g tunnl -m 0640 "$LINEAGE/privkey.pem" /etc/tunnl/privkey.pem
+systemctl try-restart tunnl
+HOOK
+sudo chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/tunnl.sh
+sudo /etc/letsencrypt/renewal-hooks/deploy/tunnl.sh
+```
+
 ```bash
 sudo nano /etc/systemd/system/tunnl.service
 ```
@@ -167,33 +195,48 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/opt/tunnl
+User=tunnl
+Group=tunnl
 ExecStart=/opt/tunnl/tunnl
 Restart=always
 RestartSec=5
+
+# Stores the SSH host key in /var/lib/tunnl
+StateDirectory=tunnl
+WorkingDirectory=/var/lib/tunnl
 
 Environment=SSH_ADDR=:22
 Environment=HTTP_ADDR=:80
 Environment=HTTPS_ADDR=:443
 Environment=STATS_ADDR=127.0.0.1:9090
-Environment=HOST_KEY_PATH=/opt/tunnl/host_key
-Environment=TLS_CERT=/etc/letsencrypt/live/yourdomain.com/fullchain.pem
-Environment=TLS_KEY=/etc/letsencrypt/live/yourdomain.com/privkey.pem
+Environment=HOST_KEY_PATH=/var/lib/tunnl/host_key
+Environment=TLS_CERT=/etc/tunnl/fullchain.pem
+Environment=TLS_KEY=/etc/tunnl/privkey.pem
 Environment=DOMAIN=yourdomain.com
+
+# Bind privileged ports without running as root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/opt/tunnl
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 ```bash
-sudo mkdir -p /opt/tunnl
-sudo cp bin/tunnl /opt/tunnl/
-sudo chmod +x /opt/tunnl/tunnl
 sudo systemctl daemon-reload
 sudo systemctl enable --now tunnl
 ```
