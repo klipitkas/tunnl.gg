@@ -91,7 +91,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestStart := time.Now()
-	sw := &statusCaptureWriter{ResponseWriter: w}
+	dw, r, stopDeadlines := newProxyDeadlines(w, r, config.ProxyIdleTimeout)
+	defer stopDeadlines()
+	sw := &statusCaptureWriter{ResponseWriter: dw}
 
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {

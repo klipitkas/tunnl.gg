@@ -332,3 +332,72 @@ func TestE2E_WebSocketLimitPerVisitor(t *testing.T) {
 	})
 	tt.dialWebSocket(t, "/ws")
 }
+
+// withTimeouts returns a public server for tt with short server-wide
+// read and write timeouts, standing in for the production HTTPS timeouts.
+func (tt *testTunnel) withTimeouts(t *testing.T, timeout time.Duration) *httptest.Server {
+	t.Helper()
+	public := httptest.NewUnstartedServer(tt.srv)
+	public.Config.ReadTimeout = timeout
+	public.Config.WriteTimeout = timeout
+	public.Start()
+	t.Cleanup(public.Close)
+	return public
+}
+
+func TestE2E_StreamingResponseOutlivesServerWriteTimeout(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Long poll: wait before responding, then stream chunks
+		time.Sleep(400 * time.Millisecond)
+		for i := 0; i < 5; i++ {
+			fmt.Fprintf(w, "chunk%d\n", i)
+			w.(http.Flusher).Flush()
+			time.Sleep(100 * time.Millisecond)
+		}
+	}))
+	public := tt.withTimeouts(t, 300*time.Millisecond)
+
+	req, _ := http.NewRequest(http.MethodGet, public.URL+"/stream", nil)
+	req.Host = tt.host()
+	resp, err := public.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading streamed body: %v (got %q)", err, body)
+	}
+	if want := "chunk0\nchunk1\nchunk2\nchunk3\nchunk4\n"; string(body) != want {
+		t.Errorf("body = %q, want %q", body, want)
+	}
+}
+
+func TestE2E_SlowUploadOutlivesServerReadTimeout(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := io.Copy(io.Discard, r.Body)
+		fmt.Fprintf(w, "%d", n)
+	}))
+	public := tt.withTimeouts(t, 300*time.Millisecond)
+
+	pr, pw := io.Pipe()
+	go func() {
+		for i := 0; i < 5; i++ {
+			pw.Write(bytes.Repeat([]byte("x"), 1000))
+			time.Sleep(100 * time.Millisecond)
+		}
+		pw.Close()
+	}()
+
+	req, _ := http.NewRequest(http.MethodPost, public.URL+"/upload", pr)
+	req.Host = tt.host()
+	resp, err := public.Client().Do(req)
+	if err != nil {
+		t.Fatalf("POST error: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "5000" {
+		t.Errorf("backend received %q bytes, want 5000 (status %d)", body, resp.StatusCode)
+	}
+}

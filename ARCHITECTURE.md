@@ -319,6 +319,8 @@ Browser                    Server                         Client
 8. **Request/Response Limits**:
    - Max request body: 128 MB
    - Max response body: 128 MB
+   - Idle timeout: proxied requests replace the fixed HTTPS read/write timeouts with a 2-minute idle timeout
+     (extended on every body read and response write), so long polls, streams and slow uploads work while data flows
 
 9. **WebSocket Limits**:
    - Max transfer: 1 GB per direction per connection (client can reconnect)

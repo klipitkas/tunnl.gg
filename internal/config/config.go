@@ -54,6 +54,11 @@ const (
 	StatsWriteTimeout      = 5 * time.Second
 	ShutdownTimeout        = 10 * time.Second
 
+	// Proxied requests replace the HTTPS read/write timeouts with an idle
+	// timeout, so long polls, streams and slow uploads work while they make
+	// progress. A request is canceled after this long without progress.
+	ProxyIdleTimeout = 2 * time.Minute
+
 	// WebSocket limits
 	WebSocketIdleTimeout    = 2 * time.Hour
 	MaxWebSocketTransfer    = 1024 * 1024 * 1024 // 1GB
