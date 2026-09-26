@@ -149,6 +149,11 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		gray + "Public URL: " + purple + url + reset + "\r\n" +
 		gray + "Expires:    " + expiresLine + reset + "\r\n\r\n"
 
+	// QR code of the URL, for opening the tunnel on a phone
+	if code, err := renderQR(url, ""); err == nil {
+		urlMessage += code + "\r\n"
+	}
+
 	// Inactivity checker
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)

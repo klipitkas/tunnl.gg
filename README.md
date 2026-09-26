@@ -11,6 +11,7 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 ## Features
 
 - Memorable subdomain per connection (e.g., `https://happy-tiger-a1b2c3d4.tunnl.gg`)
+- QR code of the URL in the terminal, for opening the tunnel on a phone
 - Automatic SSL via Let's Encrypt
 - WebSocket support
 - Comprehensive rate limiting and abuse protection

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -252,6 +253,9 @@ func TestE2E_HTTPRequestThroughTunnel(t *testing.T) {
 	}
 	if want := "GET /hello host=" + tt.host(); string(body) != want {
 		t.Errorf("body = %q, want %q", body, want)
+	}
+	if !strings.Contains(tt.output.String(), qrColors) {
+		t.Error("SSH session banner should include a QR code of the URL")
 	}
 	waitFor(t, "request log line in SSH session", func() bool {
 		return bytes.Contains([]byte(tt.output.String()), []byte("/hello"))
