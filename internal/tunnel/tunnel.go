@@ -52,8 +52,11 @@ func New(subdomain string, opener ChannelOpener, bindAddr string, bindPort uint3
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return t.Dial(ctx)
 		},
-		MaxIdleConns:    10,
-		IdleConnTimeout: 90 * time.Second,
+		// All requests share one host, so keep as many idle connections for
+		// it as in total; the default of 2 opens a channel for most requests
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
 	}
 	return t
 }

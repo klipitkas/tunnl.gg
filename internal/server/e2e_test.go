@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -681,8 +682,9 @@ func TestE2E_UnansweredChannelOpensAreBounded(t *testing.T) {
 		return sub != ""
 	})
 
-	request := func() int {
+	request := func(ctx context.Context) int {
 		req := httptest.NewRequest(http.MethodGet, "https://"+sub+"."+config.DefaultDomain+"/", nil)
+		req = req.WithContext(ctx)
 		req.RemoteAddr = "198.51.100.1:1234"
 		req.Header.Set("User-Agent", "curl/8.0")
 		rec := httptest.NewRecorder()
@@ -696,19 +698,19 @@ func TestE2E_UnansweredChannelOpensAreBounded(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			request()
+			request(context.Background())
 		}()
 	}
 	waitFor(t, "all channel opens to reach the client", func() bool {
 		return pending() == config.MaxPendingChannelOpens
 	})
 
-	start := time.Now()
-	if code := request(); code != http.StatusBadGateway {
+	// Another request waits for a slot until it gives up, without opening a
+	// channel the client would also ignore
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if code := request(ctx); code != http.StatusBadGateway {
 		t.Errorf("request over the pending limit: status %d, want %d", code, http.StatusBadGateway)
-	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Errorf("request over the pending limit took %v, want an immediate failure", elapsed)
 	}
 	if got := pending(); got != config.MaxPendingChannelOpens {
 		t.Errorf("client received %d channel opens, want at most %d", got, config.MaxPendingChannelOpens)
@@ -756,5 +758,31 @@ func TestE2E_InFlightRequestsCapped(t *testing.T) {
 	}
 	if code := tt.serveDirect("198.51.100.1:1003", nil).Code; code != http.StatusOK {
 		t.Errorf("request after the others finished: status %d, want %d", code, http.StatusOK)
+	}
+}
+
+func TestE2E_ConcurrentBurstSucceeds(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(20 * time.Millisecond) // slow enough for requests to overlap
+		fmt.Fprint(w, "ok")
+	}))
+
+	// More concurrent requests than there are channel open slots, from
+	// different visitors so rate limits don't apply
+	const n = 3 * config.MaxPendingChannelOpens
+	codes := make(chan int, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			codes <- tt.serveDirect(fmt.Sprintf("198.51.100.%d:1000", i), nil).Code
+		}(i)
+	}
+	failed := map[int]int{}
+	for i := 0; i < n; i++ {
+		if code := <-codes; code != http.StatusOK {
+			failed[code]++
+		}
+	}
+	if len(failed) > 0 {
+		t.Errorf("burst of %d concurrent requests: non-200 responses %v, want none", n, failed)
 	}
 }

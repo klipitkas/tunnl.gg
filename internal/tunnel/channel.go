@@ -2,7 +2,6 @@ package tunnel
 
 import (
 	"context"
-	"errors"
 	"net"
 	"strconv"
 	"sync"
@@ -28,10 +27,6 @@ type forwardedTCPPayload struct {
 
 // dialTimeout bounds how long opening a channel to the client may take.
 const dialTimeout = 10 * time.Second
-
-// ErrTooManyPendingOpens is returned by Dial when the client has not yet
-// answered MaxPendingChannelOpens earlier channel opens.
-var ErrTooManyPendingOpens = errors.New("tunnel: too many unanswered channel opens")
 
 type originKey struct{}
 
@@ -63,18 +58,19 @@ func origin(ctx context.Context) (string, uint32) {
 //
 // OpenChannel waits for the client's answer with no timeout, so an open the
 // client never answers stays pending until the SSH connection closes. Each
-// pending open holds a slot, and Dial fails fast once all are taken, so a
+// pending open holds one of MaxPendingChannelOpens slots. When all are taken,
+// Dial waits for a slot until its deadline: bursts queue briefly, while a
 // client that ignores opens can't make the server accumulate goroutines.
 func (t *Tunnel) Dial(ctx context.Context) (net.Conn, error) {
-	select {
-	case t.pendingOpens <- struct{}{}:
-	default:
-		return nil, ErrTooManyPendingOpens
-	}
-
 	originAddr, originPort := origin(ctx)
 	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
+
+	select {
+	case t.pendingOpens <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 
 	payload := ssh.Marshal(&forwardedTCPPayload{
 		Addr:       t.BindAddr,

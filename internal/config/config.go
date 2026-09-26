@@ -73,7 +73,7 @@ const (
 	MaxWebSocketsPerVisitor = 20                 // concurrent WebSockets per visitor IP across all tunnels
 
 	// Channel opens to a tunnel client that it hasn't answered yet. Past this,
-	// requests to the tunnel fail until the client answers or disconnects.
+	// requests wait for the client to answer (up to the 10s dial timeout).
 	MaxPendingChannelOpens = 32
 
 	// Request logging

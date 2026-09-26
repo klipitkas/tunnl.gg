@@ -29,10 +29,14 @@ type fakeOpener struct {
 	name    string
 	payload []byte
 	remote  net.Conn      // client end of the last opened channel
+	calls   int           // number of OpenChannel calls
 	release chan struct{} // if set, OpenChannel waits for it
 }
 
 func (o *fakeOpener) OpenChannel(name string, data []byte) (ssh.Channel, <-chan *ssh.Request, error) {
+	o.mu.Lock()
+	o.calls++
+	o.mu.Unlock()
 	if o.release != nil {
 		<-o.release
 	}
@@ -172,7 +176,7 @@ func TestOrigin(t *testing.T) {
 	}
 }
 
-func TestDial_FailsFastWhenOpensUnanswered(t *testing.T) {
+func TestDial_WaitsForSlotWhenOpensUnanswered(t *testing.T) {
 	opener := &fakeOpener{release: make(chan struct{})}
 	tun := New("happy-tiger-00000001", opener, "localhost", 8080, "192.0.2.1")
 
@@ -189,12 +193,18 @@ func TestDial_FailsFastWhenOpensUnanswered(t *testing.T) {
 	}
 	wg.Wait()
 
-	start := time.Now()
-	if _, err := tun.Dial(context.Background()); !errors.Is(err, ErrTooManyPendingOpens) {
-		t.Fatalf("Dial() error = %v, want ErrTooManyPendingOpens", err)
+	// With every slot taken, Dial waits until its deadline without opening
+	// another channel
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := tun.Dial(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Dial() error = %v, want context deadline exceeded", err)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Errorf("Dial() took %v with all slots taken, want an immediate failure", elapsed)
+	opener.mu.Lock()
+	calls := opener.calls
+	opener.mu.Unlock()
+	if calls != config.MaxPendingChannelOpens {
+		t.Errorf("OpenChannel called %d times, want %d (one per slot)", calls, config.MaxPendingChannelOpens)
 	}
 
 	// Once the client answers, the slots are freed

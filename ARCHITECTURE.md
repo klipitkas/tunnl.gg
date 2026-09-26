@@ -125,7 +125,7 @@ Listens on port 443 with pre-configured TLS certificates.
 6. Show interstitial warning for browser requests (first visit)
 7. Handle WebSocket upgrade if requested
 8. Reverse proxy request to the client over a new `forwarded-tcpip` SSH channel (no local listener or socket).
-   At most 32 channel opens per tunnel can await the client's answer; further requests fail fast with 502.
+   At most 32 channel opens per tunnel can await the client's answer; further requests wait for one (up to the 10s dial timeout).
 10. SSH client forwards to local application
 
 ### 4. Stats Server (`internal/server/stats.go`)
