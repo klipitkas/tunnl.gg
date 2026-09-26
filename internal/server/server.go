@@ -36,11 +36,13 @@ type Server struct {
 	totalRequests    uint64
 
 	// Abuse protection
-	abuseTracker *AbuseTracker
-	wsPerTunnel  *connLimiter       // concurrent WebSockets keyed by subdomain
-	wsPerVisitor *connLimiter       // concurrent WebSockets keyed by visitor IP
-	handshakes   *connLimiter       // in-progress SSH handshakes keyed by client IP
-	clientIPs    *clientip.Resolver // resolves visitors behind trusted proxies
+	abuseTracker  *AbuseTracker
+	wsPerTunnel   *connLimiter       // concurrent WebSockets keyed by subdomain
+	wsPerVisitor  *connLimiter       // concurrent WebSockets keyed by visitor IP
+	reqPerTunnel  *connLimiter       // in-flight proxied requests keyed by subdomain
+	reqPerVisitor *connLimiter       // in-flight proxied requests keyed by visitor IP
+	handshakes    *connLimiter       // in-progress SSH handshakes keyed by client IP
+	clientIPs     *clientip.Resolver // resolves visitors behind trusted proxies
 	// in-progress SSH handshakes server-wide, all under the single key ""
 	allHandshakes *connLimiter
 }
@@ -56,6 +58,8 @@ func New(hostKeyPath string, domain string) (*Server, error) {
 		abuseTracker:  NewAbuseTracker(),
 		wsPerTunnel:   newConnLimiter(config.MaxWebSocketsPerTunnel),
 		wsPerVisitor:  newConnLimiter(config.MaxWebSocketsPerVisitor),
+		reqPerTunnel:  newConnLimiter(config.MaxInFlightPerTunnel),
+		reqPerVisitor: newConnLimiter(config.MaxInFlightPerVisitor),
 		handshakes:    newConnLimiter(config.MaxHandshakesPerIP),
 		allHandshakes: newConnLimiter(config.MaxConcurrentHandshakes),
 		domain:        domain,

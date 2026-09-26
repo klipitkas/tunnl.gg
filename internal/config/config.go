@@ -61,6 +61,11 @@ const (
 	// progress. A request is canceled after this long without progress.
 	ProxyIdleTimeout = 2 * time.Minute
 
+	// Concurrent proxied requests (WebSockets are limited separately). Set
+	// above the visitor burst so dev servers loading many modules at once work.
+	MaxInFlightPerVisitor = 256 // per visitor IP across all tunnels
+	MaxInFlightPerTunnel  = 512 // per tunnel across all visitors
+
 	// WebSocket limits
 	WebSocketIdleTimeout    = 2 * time.Hour
 	MaxWebSocketTransfer    = 1024 * 1024 * 1024 // 1GB

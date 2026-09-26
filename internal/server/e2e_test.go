@@ -718,3 +718,43 @@ func TestE2E_UnansweredChannelOpensAreBounded(t *testing.T) {
 	client.Close()
 	wg.Wait()
 }
+
+func TestE2E_InFlightRequestsCapped(t *testing.T) {
+	arrived := make(chan struct{}, 16)
+	release := make(chan struct{})
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arrived <- struct{}{}
+		<-release // an app that holds requests open
+	}))
+	tt.srv.reqPerVisitor = newConnLimiter(2)
+	tt.srv.reqPerTunnel = newConnLimiter(3)
+
+	codes := make(chan int, 16)
+	hold := func(remoteAddr string) {
+		go func() { codes <- tt.serveDirect(remoteAddr, nil).Code }()
+		<-arrived
+	}
+	hold("198.51.100.1:1000")
+	hold("198.51.100.1:1001")
+
+	if code := tt.serveDirect("198.51.100.1:1002", nil).Code; code != http.StatusTooManyRequests {
+		t.Errorf("visitor over its in-flight limit: status %d, want %d", code, http.StatusTooManyRequests)
+	}
+	hold("198.51.100.2:1000") // another visitor still gets through
+	if got := tt.srv.GetStats(false).ActiveRequests; got != 3 {
+		t.Errorf("active_requests = %d, want 3", got)
+	}
+	if code := tt.serveDirect("198.51.100.3:1000", nil).Code; code != http.StatusServiceUnavailable {
+		t.Errorf("tunnel over its in-flight limit: status %d, want %d", code, http.StatusServiceUnavailable)
+	}
+
+	close(release)
+	for i := 0; i < 3; i++ {
+		if code := <-codes; code != http.StatusOK {
+			t.Errorf("held request finished with %d, want %d", code, http.StatusOK)
+		}
+	}
+	if code := tt.serveDirect("198.51.100.1:1003", nil).Code; code != http.StatusOK {
+		t.Errorf("request after the others finished: status %d, want %d", code, http.StatusOK)
+	}
+}

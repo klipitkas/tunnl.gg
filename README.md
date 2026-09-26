@@ -29,6 +29,7 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 | Requests per tunnel | 50/s (burst 400) | Across all visitors; excess gets 429 |
 | Request body size | 128 MB | Max upload size |
 | Response body size | 128 MB | Max response size |
+| In-flight requests | 256 per visitor, 512 per tunnel | Concurrent proxied requests; excess gets 429 (visitor) or 503 (tunnel) |
 | Request idle timeout | 2 minutes | Proxied requests are canceled after 2 minutes without data in either direction; long polls and streams can run longer while data flows |
 | WebSocket transfer | 1 GB per direction | Max data per WebSocket connection |
 | WebSocket idle timeout | 2 hours | WebSocket closed after inactivity |
@@ -336,6 +337,7 @@ Response:
   "total_blocked": 5,
   "total_rate_limited": 23,
   "active_websockets": 4,
+  "active_requests": 12,
   "subdomains": ["happy-tiger-a1b2c3d4", "calm-eagle-e5f6a7b8", "swift-wolf-d9e0f1a2"]
 }
 ```

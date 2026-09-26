@@ -92,6 +92,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Proxied requests can stay open for minutes, for example when a tunnel's
+	// app never responds, so cap how many are in flight
+	if !s.reqPerVisitor.acquire(visitor) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		return
+	}
+	defer s.reqPerVisitor.release(visitor)
+	if !s.reqPerTunnel.acquire(sub) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.reqPerTunnel.release(sub)
+
 	requestStart := time.Now()
 	r = r.WithContext(tunnel.WithOrigin(r.Context(), originAddr(client, r.RemoteAddr)))
 	dw, r, stopDeadlines := newProxyDeadlines(w, r, config.ProxyIdleTimeout)

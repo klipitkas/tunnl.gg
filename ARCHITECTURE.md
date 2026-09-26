@@ -142,6 +142,7 @@ Listens on `127.0.0.1:9090` (localhost only) and exposes metrics.
   "total_blocked": 5,
   "total_rate_limited": 23,
   "active_websockets": 4,
+  "active_requests": 12,
   "subdomains": ["happy-tiger-a1b2c3d4", "calm-eagle-e5f6a7b8"]
 }
 ```
@@ -321,6 +322,7 @@ Browser                    Server                         Client
 8. **Request/Response Limits**:
    - Max request body: 128 MB
    - Max response body: 128 MB
+   - Max in flight: 256 concurrent proxied requests per visitor IP (across tunnels) and 512 per tunnel
    - Idle timeout: proxied requests replace the fixed HTTPS read/write timeouts with a 2-minute idle timeout
      (extended on every body read and response write), so long polls, streams and slow uploads work while data flows
 
