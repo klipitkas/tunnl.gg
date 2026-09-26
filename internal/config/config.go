@@ -7,6 +7,7 @@ import (
 
 const (
 	DefaultDomain     = "tunnl.gg"
+	StableSSHUser     = "stable" // SSH user that gets a stable subdomain from its key
 	InactivityTimeout = 2 * time.Hour
 	MaxTunnelsPerIP   = 3 // Reduced from 5
 	MaxTotalTunnels   = 1000

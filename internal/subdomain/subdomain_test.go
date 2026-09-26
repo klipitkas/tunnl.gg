@@ -1,6 +1,7 @@
 package subdomain
 
 import (
+	"crypto/sha256"
 	"testing"
 )
 
@@ -56,5 +57,26 @@ func TestIsValid(t *testing.T) {
 				t.Errorf("IsValid(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFromHash(t *testing.T) {
+	sum := sha256.Sum256([]byte("some client key"))
+	sub, err := FromHash(sum[:])
+	if err != nil {
+		t.Fatalf("FromHash() error: %v", err)
+	}
+	if !IsValid(sub) {
+		t.Errorf("FromHash() produced invalid subdomain %q", sub)
+	}
+	if again, _ := FromHash(sum[:]); again != sub {
+		t.Errorf("FromHash() not deterministic: %q then %q", sub, again)
+	}
+	other := sha256.Sum256([]byte("another client key"))
+	if diff, _ := FromHash(other[:]); diff == sub {
+		t.Errorf("different hashes produced the same subdomain %q", sub)
+	}
+	if _, err := FromHash(sum[:5]); err == nil {
+		t.Error("FromHash() should reject hashes shorter than 6 bytes")
 	}
 }

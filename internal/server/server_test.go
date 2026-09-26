@@ -35,11 +35,11 @@ func TestReserveSubdomain_SkipsReservedSubdomains(t *testing.T) {
 		return sub, nil
 	}
 
-	first, err := s.ReserveSubdomain()
+	first, err := s.ReserveSubdomain(nil)
 	if err != nil {
 		t.Fatalf("ReserveSubdomain() error: %v", err)
 	}
-	second, err := s.ReserveSubdomain()
+	second, err := s.ReserveSubdomain(nil)
 	if err != nil {
 		t.Fatalf("ReserveSubdomain() error: %v", err)
 	}
@@ -51,12 +51,12 @@ func TestReserveSubdomain_SkipsReservedSubdomains(t *testing.T) {
 func TestRegisterTunnel_RequiresReservation(t *testing.T) {
 	s := newTestServer(t)
 
-	sub, err := s.ReserveSubdomain()
+	sub, err := s.ReserveSubdomain(nil)
 	if err != nil {
 		t.Fatalf("ReserveSubdomain() error: %v", err)
 	}
 	// The connection gave up waiting and cleaned up before registering
-	s.RemoveTunnel(sub)
+	s.RemoveTunnel(sub, nil)
 
 	if tun := s.RegisterTunnel(sub, nil, "localhost", 80, "192.0.2.1"); tun != nil {
 		t.Error("RegisterTunnel() should refuse a subdomain whose reservation was released")

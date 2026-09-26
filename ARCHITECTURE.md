@@ -81,9 +81,12 @@ Listens on port 22 (configurable) and handles remote port forwarding requests.
 **Flow:**
 
 1. Client connects: `ssh -t -R 80:localhost:8080 tunnl.gg`
-2. Server drops blocked IPs and enforces handshake concurrency limits, then performs the SSH handshake with a 30s timeout (no auth required)
+2. Server drops blocked IPs and enforces handshake concurrency limits, then performs the SSH handshake with a 30s timeout.
+   No auth is required, except for the `stable` user, which must offer an SSH key (any key is accepted)
 3. Server sets `TCP_NODELAY` for low latency
-4. Server generates memorable subdomain (e.g., `happy-tiger-a1b2c3d4`)
+4. Server assigns a memorable subdomain (e.g., `happy-tiger-a1b2c3d4`): random, or for the `stable` user
+   derived from its key as `HMAC-SHA256(secret derived from the host key, public key)`, replacing any older
+   connection with the same key
 5. Server registers tunnel in registry when the client sends its `tcpip-forward` request
 6. Server sends URL to client via session channel
 7. For each proxied connection, the server opens a `forwarded-tcpip` channel to the client
@@ -368,7 +371,7 @@ Browser                    Server                         Client
 
 ## Limitations
 
-- No custom subdomains (random only)
+- No custom subdomains (random, or stable per SSH key via the `stable` user)
 - No authentication/accounts
 - Single server (no horizontal scaling)
 - Certificates must be pre-configured (no automatic ACME)

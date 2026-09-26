@@ -65,13 +65,23 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	s.IncrementConnections()
 
-	sub, err := s.ReserveSubdomain()
-	if err != nil {
-		log.Printf("Failed to generate subdomain: %v", err)
-		return
+	// Clients that connected as the stable user with a key get the key's
+	// subdomain; everyone else, or a stable client whose subdomain is held by a
+	// different key, gets a random one
+	sub, stable := "", false
+	if perms := sshConn.Permissions; perms != nil && perms.Extensions[permStableSubdomain] != "" {
+		sub = perms.Extensions[permStableSubdomain]
+		stable = s.claimStableSubdomain(sub, sshConn, perms.Extensions[permKeyFingerprint])
 	}
-	defer s.RemoveTunnel(sub)
-	log.Printf("New SSH connection from %s, assigned subdomain: %s", sshConn.RemoteAddr(), sub)
+	if !stable {
+		var err error
+		if sub, err = s.ReserveSubdomain(sshConn); err != nil {
+			log.Printf("Failed to generate subdomain: %v", err)
+			return
+		}
+	}
+	defer s.RemoveTunnel(sub, sshConn)
+	log.Printf("New SSH connection from %s, assigned subdomain: %s (stable: %v)", sshConn.RemoteAddr(), sub, stable)
 
 	var bindAddr string
 	var bindPort uint32
@@ -143,10 +153,14 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		purple    = "\033[38;5;141m"
 	)
 
+	urlNote := "random; connect as " + config.StableSSHUser + "@ to keep the same URL"
+	if stable {
+		urlNote = "stays the same for your SSH key"
+	}
 	urlMessage := "\r\n" +
 		gray + "Connected to " + s.domain + "." + reset + "\r\n" +
 		boldGreen + "Tunnel is live!" + reset + "\r\n" +
-		gray + "Public URL: " + purple + url + reset + "\r\n" +
+		gray + "Public URL: " + purple + url + gray + " (" + urlNote + ")" + reset + "\r\n" +
 		gray + "Expires:    " + expiresLine + reset + "\r\n\r\n"
 
 	// QR code of the URL, for opening the tunnel on a phone
@@ -248,6 +262,34 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	}
 
 	log.Printf("SSH connection closed for subdomain: %s", sub)
+}
+
+// stableTakeoverTimeout bounds how long a new connection waits for an older
+// connection with the same key to release its subdomain.
+const stableTakeoverTimeout = 5 * time.Second
+
+// claimStableSubdomain claims sub for conn. If a connection with the same key
+// holds it, for example one left over from before a laptop slept, that
+// connection is closed and conn takes the subdomain over once its cleanup
+// releases it. It returns false if sub is held by a different key.
+func (s *Server) claimStableSubdomain(sub string, conn sshConnection, keyFP string) bool {
+	deadline := time.Now().Add(stableTakeoverTimeout)
+	var replaced sshConnection
+	for {
+		holder, ok := s.claimSubdomain(sub, conn, keyFP)
+		if ok {
+			return true
+		}
+		if holder == nil || time.Now().After(deadline) {
+			return false
+		}
+		if holder != replaced {
+			log.Printf("Replacing the previous connection for stable subdomain %s", sub)
+			_ = holder.Close() // its cleanup releases sub
+			replaced = holder
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // beginHandshake reports whether an SSH handshake from clientIP may start,

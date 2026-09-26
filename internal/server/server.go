@@ -19,17 +19,31 @@ import (
 	"tunnl.gg/internal/tunnel"
 )
 
+// sshConnection is the SSH connection a tunnel belongs to (an *ssh.ServerConn).
+type sshConnection interface {
+	tunnel.ChannelOpener
+	Close() error
+}
+
+// subdomainOwner is the connection holding a subdomain, from when it is
+// reserved until its tunnel is removed.
+type subdomainOwner struct {
+	conn  sshConnection
+	keyFP string // client key fingerprint for a stable subdomain, "" for a random one
+}
+
 // Server manages SSH tunnels and HTTP proxying
 type Server struct {
-	tunnels       map[string]*tunnel.Tunnel
-	reservedSubs  map[string]struct{} // subdomains handed out but not yet registered
-	ipConnections map[string]int      // reserved connection slots per IP
-	totalReserved int                 // reserved connection slots server-wide
-	newSubdomain  func() (string, error)
-	sshConns      map[string][]*ssh.ServerConn // SSH connections per IP for forced closure
-	mu            sync.RWMutex
-	sshConfig     *ssh.ServerConfig
-	domain        string
+	tunnels         map[string]*tunnel.Tunnel
+	owners          map[string]subdomainOwner // every reserved or registered subdomain
+	ipConnections   map[string]int            // reserved connection slots per IP
+	totalReserved   int                       // reserved connection slots server-wide
+	newSubdomain    func() (string, error)
+	sshConns        map[string][]*ssh.ServerConn // SSH connections per IP for forced closure
+	mu              sync.RWMutex
+	sshConfig       *ssh.ServerConfig
+	domain          string
+	subdomainSecret []byte // keys the derivation of stable subdomains
 
 	// Stats
 	totalConnections uint64
@@ -51,7 +65,7 @@ type Server struct {
 func New(hostKeyPath string, domain string) (*Server, error) {
 	s := &Server{
 		tunnels:       make(map[string]*tunnel.Tunnel),
-		reservedSubs:  make(map[string]struct{}),
+		owners:        make(map[string]subdomainOwner),
 		newSubdomain:  subdomain.Generate,
 		ipConnections: make(map[string]int),
 		sshConns:      make(map[string][]*ssh.ServerConn),
@@ -75,14 +89,17 @@ func New(hostKeyPath string, domain string) (*Server, error) {
 	})
 
 	s.sshConfig = &ssh.ServerConfig{
-		NoClientAuth: true,
+		NoClientAuth:         true,
+		NoClientAuthCallback: s.authNone,
+		PublicKeyCallback:    s.authPublicKey,
 	}
 
-	hostKey, err := loadOrGenerateHostKey(hostKeyPath)
+	hostKey, hostKeyPEM, err := loadOrGenerateHostKey(hostKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load host key: %w", err)
 	}
 	s.sshConfig.AddHostKey(hostKey)
+	s.subdomainSecret = subdomainSecretFromHostKey(hostKeyPEM)
 
 	return s, nil
 }
@@ -103,13 +120,15 @@ func (s *Server) SSHConfig() *ssh.ServerConfig {
 	return s.sshConfig
 }
 
-func loadOrGenerateHostKey(path string) (ssh.Signer, error) {
+// loadOrGenerateHostKey returns the SSH host key and its PEM encoding,
+// generating the key first if it doesn't exist.
+func loadOrGenerateHostKey(path string) (ssh.Signer, []byte, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		log.Printf("Generating new host key at %s", path)
 
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		pemBlock := &pem.Block{
@@ -118,21 +137,22 @@ func loadOrGenerateHostKey(path string) (ssh.Signer, error) {
 		}
 
 		if err := os.WriteFile(path, pem.EncodeToMemory(pemBlock), 0600); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	keyBytes, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return ssh.ParsePrivateKey(keyBytes)
+	signer, err := ssh.ParsePrivateKey(keyBytes)
+	return signer, keyBytes, err
 }
 
-// ReserveSubdomain generates a subdomain that doesn't collide with existing or
-// reserved ones and reserves it until RemoveTunnel is called.
-func (s *Server) ReserveSubdomain() (string, error) {
+// ReserveSubdomain generates a random subdomain that isn't in use and reserves
+// it for conn until RemoveTunnel is called.
+func (s *Server) ReserveSubdomain(conn sshConnection) (string, error) {
 	const maxAttempts = 10
 	for i := 0; i < maxAttempts; i++ {
 		sub, err := s.newSubdomain()
@@ -141,16 +161,33 @@ func (s *Server) ReserveSubdomain() (string, error) {
 		}
 
 		s.mu.Lock()
-		_, exists := s.tunnels[sub]
-		_, reserved := s.reservedSubs[sub]
-		if !exists && !reserved {
-			s.reservedSubs[sub] = struct{}{}
+		if _, held := s.owners[sub]; !held {
+			s.owners[sub] = subdomainOwner{conn: conn}
 			s.mu.Unlock()
 			return sub, nil
 		}
 		s.mu.Unlock()
 	}
 	return "", fmt.Errorf("failed to generate unique subdomain after %d attempts", maxAttempts)
+}
+
+// claimSubdomain reserves sub for conn, whose client key has fingerprint
+// keyFP, if sub is free. If it is held by a connection with the same key,
+// that connection is returned so the caller can replace it. Otherwise sub is
+// held by someone else and neither is returned.
+func (s *Server) claimSubdomain(sub string, conn sshConnection, keyFP string) (holder sshConnection, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	owner, held := s.owners[sub]
+	if !held {
+		s.owners[sub] = subdomainOwner{conn: conn, keyFP: keyFP}
+		return nil, true
+	}
+	if keyFP != "" && owner.keyFP == keyFP {
+		return owner.conn, false
+	}
+	return nil, false
 }
 
 // CheckAndReserveConnection checks if a new connection from the given IP is allowed
@@ -197,27 +234,30 @@ func (s *Server) DecrementIPConnection(clientIP string) {
 	s.mu.Unlock()
 }
 
-// RegisterTunnel registers a new tunnel under a subdomain reserved with
-// ReserveSubdomain. It returns nil if the reservation has already been
-// released, so a late registration can't outlive its connection's cleanup.
-func (s *Server) RegisterTunnel(sub string, opener tunnel.ChannelOpener, bindAddr string, bindPort uint32, clientIP string) *tunnel.Tunnel {
+// RegisterTunnel registers a tunnel for conn under a subdomain it reserved. It
+// returns nil if conn no longer holds sub, so a late registration can't outlive
+// its connection's cleanup or take over another connection's subdomain.
+func (s *Server) RegisterTunnel(sub string, conn sshConnection, bindAddr string, bindPort uint32, clientIP string) *tunnel.Tunnel {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, reserved := s.reservedSubs[sub]; !reserved {
+	if owner, held := s.owners[sub]; !held || owner.conn != conn {
 		return nil
 	}
-	t := tunnel.New(sub, opener, bindAddr, bindPort, clientIP)
-	delete(s.reservedSubs, sub)
+	t := tunnel.New(sub, conn, bindAddr, bindPort, clientIP)
 	s.tunnels[sub] = t
 	return t
 }
 
-// RemoveTunnel removes and closes a tunnel, and releases its subdomain reservation
-func (s *Server) RemoveTunnel(sub string) {
+// RemoveTunnel removes and closes conn's tunnel and releases its subdomain. It
+// does nothing if another connection has since taken the subdomain over.
+func (s *Server) RemoveTunnel(sub string, conn sshConnection) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.reservedSubs, sub)
+	if owner, held := s.owners[sub]; !held || owner.conn != conn {
+		return
+	}
+	delete(s.owners, sub)
 	if t, ok := s.tunnels[sub]; ok {
 		t.Close()
 		delete(s.tunnels, sub)

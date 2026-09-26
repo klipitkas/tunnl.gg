@@ -16,6 +16,7 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 
 - Memorable subdomain per connection (e.g., `https://happy-tiger-a1b2c3d4.tunnl.gg`)
 - QR code of the URL in the terminal, for opening the tunnel on a phone
+- Optional stable URL tied to your SSH key (`stable@`), no account needed
 - Automatic SSL via Let's Encrypt
 - WebSocket support
 - Comprehensive rate limiting and abuse protection
@@ -279,6 +280,22 @@ sudo systemctl enable --now tunnl
 # Expose local port 8080
 ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 ```
+
+### Keep the Same URL
+
+By default each connection gets a new random URL. Connect as `stable` to get a URL
+tied to your SSH key instead, which stays the same every time you reconnect:
+
+```bash
+ssh -t -R 80:localhost:8080 stable@proxy.tunnl.gg
+```
+
+- Any SSH key works; there's nothing to register. Without one, `stable@` is refused
+  (create a key with `ssh-keygen -t ed25519`).
+- Reconnecting with the same key while an old connection is still up (for example
+  after your laptop slept) replaces the old connection.
+- The URL can't be worked out from your public key, but changes if the server's host
+  key changes.
 
 ### Expose a Different Host
 

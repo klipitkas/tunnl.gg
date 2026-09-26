@@ -44,6 +44,18 @@ func Generate() (string, error) {
 	return fmt.Sprintf("%s-%s-%s", adj, noun, hexSuffix), nil
 }
 
+// FromHash builds a subdomain in the same format as Generate from the first
+// 6 bytes of sum, which should be the output of a cryptographic hash or MAC.
+// len(adjectives) and len(nouns) divide 256, so each word is chosen uniformly.
+func FromHash(sum []byte) (string, error) {
+	if len(sum) < 6 {
+		return "", fmt.Errorf("hash too short: %d bytes, need 6", len(sum))
+	}
+	adj := adjectives[int(sum[0])%len(adjectives)]
+	noun := nouns[int(sum[1])%len(nouns)]
+	return fmt.Sprintf("%s-%s-%s", adj, noun, hex.EncodeToString(sum[2:6])), nil
+}
+
 // IsValid checks if a subdomain matches the expected format (adjective-noun-hex)
 func IsValid(s string) bool {
 	parts := strings.Split(s, "-")

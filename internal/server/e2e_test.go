@@ -73,12 +73,25 @@ func startSSHServer(t *testing.T) (*Server, string) {
 	return srv, sshLn.Addr().String()
 }
 
-func dialSSH(addr string) (*ssh.Client, error) {
-	return ssh.Dial("tcp", addr, &ssh.ClientConfig{
+// anonymousClient is how most clients connect: no key, any username.
+func anonymousClient() *ssh.ClientConfig {
+	return &ssh.ClientConfig{
 		User:            "test",
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         5 * time.Second,
-	})
+	}
+}
+
+// stableClient connects as the stable user with key.
+func stableClient(key ssh.Signer) *ssh.ClientConfig {
+	cfg := anonymousClient()
+	cfg.User = config.StableSSHUser
+	cfg.Auth = []ssh.AuthMethod{ssh.PublicKeys(key)}
+	return cfg
+}
+
+func dialSSH(addr string) (*ssh.Client, error) {
+	return ssh.Dial("tcp", addr, anonymousClient())
 }
 
 // startTestTunnel starts a server, connects an SSH client that forwards
@@ -86,8 +99,14 @@ func dialSSH(addr string) (*ssh.Client, error) {
 func startTestTunnel(t *testing.T, backend http.Handler) *testTunnel {
 	t.Helper()
 	srv, addr := startSSHServer(t)
+	return openTunnel(t, srv, addr, anonymousClient(), backend)
+}
 
-	client, err := dialSSH(addr)
+// openTunnel connects an SSH client to the server at addr with clientConfig,
+// forwards tunnel traffic to backend, and waits for the tunnel to go live.
+func openTunnel(t *testing.T, srv *Server, addr string, clientConfig *ssh.ClientConfig, backend http.Handler) *testTunnel {
+	t.Helper()
+	client, err := ssh.Dial("tcp", addr, clientConfig)
 	if err != nil {
 		t.Fatalf("ssh.Dial() error: %v", err)
 	}
