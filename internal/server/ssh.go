@@ -73,11 +73,12 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	s.IncrementConnections()
 
-	sub, err := s.GenerateUniqueSubdomain()
+	sub, err := s.ReserveSubdomain()
 	if err != nil {
 		log.Printf("Failed to generate subdomain: %v", err)
 		return
 	}
+	defer s.RemoveTunnel(sub)
 	log.Printf("New SSH connection from %s, assigned subdomain: %s", sshConn.RemoteAddr(), sub)
 
 	tunnelListener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -119,7 +120,13 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 					}
 					bindAddr = fwdReq.BindAddr
 					bindPort = fwdReq.BindPort
-					tun = s.RegisterTunnel(sub, tunnelListener, bindAddr, bindPort, clientIP)
+					t := s.RegisterTunnel(sub, tunnelListener, bindAddr, bindPort, clientIP)
+					if t == nil {
+						// The connection is already being cleaned up
+						req.Reply(false, nil)
+						return
+					}
+					tun = t
 					registered = true
 					close(tunnelRegistered)
 					req.Reply(true, nil)
@@ -140,8 +147,6 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		log.Printf("Timeout waiting for tcpip-forward request from %s", sshConn.RemoteAddr())
 		return
 	}
-
-	defer s.RemoveTunnel(sub)
 
 	url := fmt.Sprintf("https://%s.%s", sub, s.domain)
 	expiresAt := tun.CreatedAt.Add(config.MaxTunnelLifetime).Format("Jan 02, 2006 at 15:04 MST")

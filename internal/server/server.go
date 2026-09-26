@@ -22,7 +22,10 @@ import (
 // Server manages SSH tunnels and HTTP proxying
 type Server struct {
 	tunnels       map[string]*tunnel.Tunnel
-	ipConnections map[string]int
+	reservedSubs  map[string]struct{} // subdomains handed out but not yet registered
+	ipConnections map[string]int      // reserved connection slots per IP
+	totalReserved int                 // reserved connection slots server-wide
+	newSubdomain  func() (string, error)
 	sshConns      map[string][]*ssh.ServerConn // SSH connections per IP for forced closure
 	mu            sync.RWMutex
 	sshConfig     *ssh.ServerConfig
@@ -45,6 +48,8 @@ type Server struct {
 func New(hostKeyPath string, domain string) (*Server, error) {
 	s := &Server{
 		tunnels:       make(map[string]*tunnel.Tunnel),
+		reservedSubs:  make(map[string]struct{}),
+		newSubdomain:  subdomain.Generate,
 		ipConnections: make(map[string]int),
 		sshConns:      make(map[string][]*ssh.ServerConn),
 		abuseTracker:  NewAbuseTracker(),
@@ -114,22 +119,25 @@ func loadOrGenerateHostKey(path string) (ssh.Signer, error) {
 	return ssh.ParsePrivateKey(keyBytes)
 }
 
-// GenerateUniqueSubdomain generates a subdomain that doesn't collide with existing ones
-func (s *Server) GenerateUniqueSubdomain() (string, error) {
+// ReserveSubdomain generates a subdomain that doesn't collide with existing or
+// reserved ones and reserves it until RemoveTunnel is called.
+func (s *Server) ReserveSubdomain() (string, error) {
 	const maxAttempts = 10
 	for i := 0; i < maxAttempts; i++ {
-		sub, err := subdomain.Generate()
+		sub, err := s.newSubdomain()
 		if err != nil {
 			return "", err
 		}
 
-		s.mu.RLock()
+		s.mu.Lock()
 		_, exists := s.tunnels[sub]
-		s.mu.RUnlock()
-
-		if !exists {
+		_, reserved := s.reservedSubs[sub]
+		if !exists && !reserved {
+			s.reservedSubs[sub] = struct{}{}
+			s.mu.Unlock()
 			return sub, nil
 		}
+		s.mu.Unlock()
 	}
 	return "", fmt.Errorf("failed to generate unique subdomain after %d attempts", maxAttempts)
 }
@@ -155,12 +163,15 @@ func (s *Server) CheckAndReserveConnection(clientIP string) error {
 	if s.ipConnections[clientIP] >= config.MaxTunnelsPerIP {
 		return fmt.Errorf("rate limit exceeded: max %d tunnels per IP", config.MaxTunnelsPerIP)
 	}
-	if len(s.tunnels) >= config.MaxTotalTunnels {
+	// Count reservations rather than registered tunnels, since tunnels are
+	// registered later and concurrent connections could otherwise overshoot
+	if s.totalReserved >= config.MaxTotalTunnels {
 		return fmt.Errorf("server capacity reached: max %d total tunnels", config.MaxTotalTunnels)
 	}
 
 	// Atomically reserve the connection slot
 	s.ipConnections[clientIP]++
+	s.totalReserved++
 	return nil
 }
 
@@ -168,26 +179,34 @@ func (s *Server) CheckAndReserveConnection(clientIP string) error {
 func (s *Server) DecrementIPConnection(clientIP string) {
 	s.mu.Lock()
 	s.ipConnections[clientIP]--
+	s.totalReserved--
 	if s.ipConnections[clientIP] <= 0 {
 		delete(s.ipConnections, clientIP)
 	}
 	s.mu.Unlock()
 }
 
-// RegisterTunnel registers a new tunnel
+// RegisterTunnel registers a new tunnel under a subdomain reserved with
+// ReserveSubdomain. It returns nil if the reservation has already been
+// released, so a late registration can't outlive its connection's cleanup.
 func (s *Server) RegisterTunnel(sub string, listener net.Listener, bindAddr string, bindPort uint32, clientIP string) *tunnel.Tunnel {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if _, reserved := s.reservedSubs[sub]; !reserved {
+		return nil
+	}
 	t := tunnel.New(sub, listener, bindAddr, bindPort, clientIP)
+	delete(s.reservedSubs, sub)
 	s.tunnels[sub] = t
 	return t
 }
 
-// RemoveTunnel removes and closes a tunnel
+// RemoveTunnel removes and closes a tunnel, and releases its subdomain reservation
 func (s *Server) RemoveTunnel(sub string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	delete(s.reservedSubs, sub)
 	if t, ok := s.tunnels[sub]; ok {
 		t.Close()
 		delete(s.tunnels, sub)

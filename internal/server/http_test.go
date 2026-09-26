@@ -457,6 +457,10 @@ func TestServeHTTP_RateLimitThrottlesVisitorWithoutPenalizingOwner(t *testing.T)
 		sub     = "happy-tiger-0123abcd"
 		ownerIP = "192.0.2.10"
 	)
+	srv.newSubdomain = func() (string, error) { return sub, nil }
+	if _, err := srv.ReserveSubdomain(); err != nil {
+		t.Fatalf("ReserveSubdomain() error: %v", err)
+	}
 	srv.RegisterTunnel(sub, ln, "localhost", 80, ownerIP)
 	t.Cleanup(func() { srv.RemoveTunnel(sub) })
 
