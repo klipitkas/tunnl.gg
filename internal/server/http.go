@@ -173,8 +173,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 
 	// Copy data bidirectionally with limits
 	var backendBytes, clientBytes int64
+	clientDone := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
+		defer close(clientDone)
 		backendBytes, _ = copyWithLimits(backendConn, clientConn, config.MaxWebSocketTransfer, config.WebSocketIdleTimeout)
 		// Signal backend we're done sending
 		if tc, ok := backendConn.(*net.TCPConn); ok {
@@ -186,6 +188,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 		clientBytes, _ = copyWithLimits(clientConn, backendConn, config.MaxWebSocketTransfer, config.WebSocketIdleTimeout)
 	}()
 	<-done
+	// Once the backend is done, close both sides to stop the client copy, and
+	// wait for it so its byte count is complete before logging
+	hijacked.Close()
+	backendConn.Close()
+	<-clientDone
 
 	if logger != nil {
 		logger.LogWebSocketClose(wsPath, time.Since(wsStart), backendBytes+clientBytes)
