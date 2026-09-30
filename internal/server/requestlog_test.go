@@ -177,3 +177,27 @@ func TestE2E_RequestLogShowsResponsesCutOff(t *testing.T) {
 			strings.Contains(out, "↳ response cut off: your local app stopped sending: unexpected EOF")
 	})
 }
+
+func TestE2E_WebSocketClosesWhenVisitorLeaves(t *testing.T) {
+	// The app reads until the visitor is gone but never closes its side
+	release := make(chan struct{})
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, brw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+		brw.Flush()
+		io.Copy(io.Discard, brw)
+		<-release
+	}))
+	t.Cleanup(func() { close(release) })
+
+	conn, _ := tt.dialWebSocket(t, "/ws")
+	conn.Close()
+
+	waitFor(t, "WebSocket slots released after the visitor left", func() bool {
+		return strings.Contains(tt.sessionText(), "closed after") && tt.srv.GetStats(false).ActiveWebSockets == 0
+	})
+}

@@ -322,20 +322,22 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 	go func() {
 		defer close(clientDone)
 		backendBytes, _ = copyWithLimits(backendConn, clientConn, config.MaxWebSocketTransfer, config.WebSocketIdleTimeout)
-		// Signal backend we're done sending
-		if cw, ok := backendConn.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-		}
 	}()
 	go func() {
 		defer close(done)
 		clientBytes, _ = copyWithLimits(clientConn, backendConn, config.MaxWebSocketTransfer, config.WebSocketIdleTimeout)
 	}()
-	<-done
-	// Once the backend is done, close both sides to stop the client copy, and
-	// wait for it so its byte count is complete before logging
+	// Once either side is done, close both to stop the other copy: an app
+	// that ignores the visitor leaving would otherwise hold the WebSocket's
+	// slots until the idle timeout. Wait for both copies so the byte count is
+	// complete before logging.
+	select {
+	case <-done:
+	case <-clientDone:
+	}
 	hijacked.Close()
 	backendConn.Close()
+	<-done
 	<-clientDone
 
 	closed := wsEntry
