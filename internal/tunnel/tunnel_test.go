@@ -1,9 +1,7 @@
 package tunnel
 
 import (
-	"bytes"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -139,17 +137,25 @@ func TestAllowRequest_ThrottledVisitorDoesNotDrainTunnelBudget(t *testing.T) {
 	}
 }
 
-func TestClose_FlushesAndDetachesLogger(t *testing.T) {
+func TestClose_DetachesLoggerWithoutWaiting(t *testing.T) {
 	tun := newTestTunnel(t)
 
-	var buf bytes.Buffer
-	tun.SetLogger(NewRequestLogger(&buf, 16))
+	// A client that stopped reading must not block Close, which runs under
+	// the server's lock
+	w := blockedWriter{unblock: make(chan struct{})}
+	defer close(w.unblock)
+	tun.SetLogger(NewRequestLogger(w, 16))
 	tun.Logger().Log(Entry{Time: time.Now(), Method: "GET", Target: "/pending", Status: 200, Bytes: 0})
 
-	tun.Close()
-
-	if !strings.Contains(buf.String(), "/pending") {
-		t.Errorf("Close() should flush pending log lines, got %q", buf.String())
+	closed := make(chan struct{})
+	go func() {
+		tun.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close() blocked on a logger whose writer is stuck")
 	}
 	if tun.Logger() != nil {
 		t.Error("Close() should detach the logger so requests stop logging to a closed session")

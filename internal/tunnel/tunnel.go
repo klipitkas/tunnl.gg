@@ -130,6 +130,9 @@ func (t *Tunnel) Close() {
 	t.logger = nil
 	t.mu.Unlock()
 	if l != nil {
-		l.Close()
+		// Don't wait for the log to flush: callers may hold locks, and a client
+		// that stopped reading would block the write until its connection
+		// closes. The SSH session flushes its own log before this.
+		l.CloseWithin(0)
 	}
 }

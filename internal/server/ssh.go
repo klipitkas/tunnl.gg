@@ -149,7 +149,9 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	endSession := func(reason string) {
 		if logger := tun.Logger(); logger != nil {
 			logger.Notice(reason + ". " + logger.Summary() + ".")
-			logger.Close() // flush before the connection closes
+			// Flush before the connection closes, but don't wait on a client
+			// that stopped reading: closing the connection unblocks the write
+			logger.CloseWithin(logFlushTimeout)
 		}
 		sshConn.Close()
 	}
@@ -228,7 +230,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	logger := tunnel.NewRequestLogger(channel, config.LogBufferSize)
 	tun.SetLogger(logger)
-	defer logger.Close()
+	defer logger.CloseWithin(logFlushTimeout)
 
 	// Handle session requests
 	go func(ch ssh.Channel, reqs <-chan *ssh.Request) {
@@ -270,6 +272,10 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 // lifetimeWarning is how long before the lifetime limit the user is warned.
 const lifetimeWarning = 10 * time.Minute
+
+// logFlushTimeout bounds how long a closing session waits for its request log
+// to reach the client.
+const logFlushTimeout = 2 * time.Second
 
 // Session banner colors.
 const (

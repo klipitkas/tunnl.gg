@@ -259,6 +259,42 @@ func TestCloseIdempotent(t *testing.T) {
 	l.Close() // second call should not panic
 }
 
+// blockedWriter blocks every write until unblock is closed, like an SSH
+// channel whose client stopped reading.
+type blockedWriter struct{ unblock chan struct{} }
+
+func (w blockedWriter) Write(p []byte) (int, error) {
+	<-w.unblock
+	return 0, errors.New("closed")
+}
+
+func TestCloseWithin(t *testing.T) {
+	var buf bytes.Buffer
+	l := NewRequestLogger(&buf, 16)
+	l.Notice("bye")
+	if !l.CloseWithin(time.Second) {
+		t.Fatal("CloseWithin should report a flushed log")
+	}
+	if !strings.Contains(buf.String(), "bye") {
+		t.Errorf("CloseWithin should flush queued lines: %q", buf.String())
+	}
+}
+
+func TestCloseWithin_BlockedWriter(t *testing.T) {
+	w := blockedWriter{unblock: make(chan struct{})}
+	defer close(w.unblock)
+	l := NewRequestLogger(w, 16)
+	l.Notice("stuck")
+
+	start := time.Now()
+	if l.CloseWithin(50 * time.Millisecond) {
+		t.Error("CloseWithin should report a log it couldn't flush")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("CloseWithin took %s with a blocked writer", elapsed)
+	}
+}
+
 func TestLogAfterClose(t *testing.T) {
 	var buf bytes.Buffer
 	l := NewRequestLogger(&buf, 16)

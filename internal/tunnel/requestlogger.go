@@ -164,13 +164,31 @@ func (l *RequestLogger) Summary() string {
 
 // Close stops the logger, draining any remaining messages. It is idempotent.
 func (l *RequestLogger) Close() {
+	l.stop()
+	<-l.done
+}
+
+// CloseWithin is Close, but waits at most timeout for the remaining messages
+// to be written. It reports whether they were. A writer that stays blocked
+// keeps the drain goroutine running until the write fails.
+func (l *RequestLogger) CloseWithin(timeout time.Duration) bool {
+	l.stop()
+	select {
+	case <-l.done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+// stop stops accepting messages and lets drain finish once the queue is empty.
+func (l *RequestLogger) stop() {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	if !l.closed {
 		l.closed = true
 		close(l.ch)
 	}
-	l.mu.Unlock()
-	<-l.done
 }
 
 // Header returns the column headings of the request log.
