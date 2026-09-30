@@ -811,3 +811,35 @@ func TestE2E_ConcurrentBurstSucceeds(t *testing.T) {
 		t.Errorf("burst of %d concurrent requests: non-200 responses %v, want none", n, failed)
 	}
 }
+
+func TestE2E_ExtraChannelOpensRejected(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "ok")
+	}))
+
+	// More opens than the SSH library queues, like ControlMaster sessions or
+	// -L forwards: each must be answered, not left to stall the connection
+	for i := 0; i < 20; i++ {
+		kind := "direct-tcpip"
+		if i%2 == 0 {
+			kind = "session"
+		}
+		opened := make(chan error, 1)
+		go func() {
+			_, _, err := tt.client.OpenChannel(kind, nil)
+			opened <- err
+		}()
+		select {
+		case err := <-opened:
+			if err == nil {
+				t.Fatalf("open %d (%s) was accepted, want rejected", i, kind)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("open %d (%s) was never answered", i, kind)
+		}
+	}
+
+	if resp := tt.get(t, "/"); resp.StatusCode != http.StatusOK {
+		t.Errorf("tunnel status after extra opens = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}

@@ -192,22 +192,21 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		}
 	}()
 
-	// Wait for a session channel with timeout
+	// Wait for a session channel with timeout. Channel opens must be answered
+	// for as long as the connection is open: unread ones fill the SSH
+	// library's queue and then stall the whole connection, tunnel included.
 	sessionReceived := make(chan ssh.NewChannel, 1)
 	go func() {
-		for {
-			select {
-			case newChannel, ok := <-chans:
-				if !ok {
-					return
-				}
-				if newChannel.ChannelType() == "session" {
-					sessionReceived <- newChannel
-					return
-				}
+		gotSession := false
+		for newChannel := range chans {
+			switch {
+			case newChannel.ChannelType() != "session":
 				newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
-			case <-ctx.Done():
-				return
+			case gotSession:
+				newChannel.Reject(ssh.Prohibited, "only one session per connection")
+			default:
+				gotSession = true
+				sessionReceived <- newChannel
 			}
 		}
 	}()
