@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"tunnl.gg/internal/clientip"
 	"tunnl.gg/internal/config"
@@ -79,6 +80,7 @@ func main() {
 	sshDone := make(chan struct{})
 	go func() {
 		defer close(sshDone)
+		var retryDelay time.Duration
 		for {
 			conn, err := sshListener.Accept()
 			if err != nil {
@@ -88,9 +90,18 @@ func main() {
 					return
 				default:
 				}
-				log.Printf("Failed to accept SSH connection: %v", err)
+				// Back off on repeated failures, such as running out of file
+				// descriptors, instead of spinning, like net/http does
+				retryDelay = min(max(2*retryDelay, 5*time.Millisecond), time.Second)
+				log.Printf("Failed to accept SSH connection: %v; retrying in %v", err, retryDelay)
+				select {
+				case <-sshShutdown:
+					return
+				case <-time.After(retryDelay):
+				}
 				continue
 			}
+			retryDelay = 0
 			go srv.HandleSSHConnection(conn)
 		}
 	}()
