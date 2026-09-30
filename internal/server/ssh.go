@@ -23,7 +23,9 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	clientIP := "unknown"
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		if tcpAddr, ok := tcpConn.RemoteAddr().(*net.TCPAddr); ok {
-			clientIP = tcpAddr.IP.String()
+			// Group IPv6 by /64 like HTTP rate limiting, so rotating addresses
+			// within one network doesn't get around the per-IP limits
+			clientIP = visitorKey(tcpAddr.String())
 		}
 		// Set TCP_NODELAY to prevent SSH library from logging errors
 		tcpConn.SetNoDelay(true)
