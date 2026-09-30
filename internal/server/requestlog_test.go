@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -125,5 +126,54 @@ func TestE2E_CtrlCShowsSummary(t *testing.T) {
 	}
 	waitFor(t, "summary on stop", func() bool {
 		return strings.Contains(tt.sessionText(), "Stopped. 2 requests, 4 B served.")
+	})
+}
+
+func TestDescribeCutOff(t *testing.T) {
+	tests := []struct {
+		name string
+		body *limitedReadCloser
+		want string
+	}{
+		{"no response", nil, "response cut off: the visitor left, or no data for 2m"},
+		{"visitor left", &limitedReadCloser{}, "response cut off: the visitor left, or no data for 2m"},
+		{"canceled", &limitedReadCloser{err: context.Canceled}, "response cut off: the visitor left, or no data for 2m"},
+		{"too large", &limitedReadCloser{err: fmt.Errorf("%w (exceeded 5 bytes)", errResponseTooLarge)},
+			"response larger than 128.0 MB, cut off"},
+		{"app stopped", &limitedReadCloser{err: fmt.Errorf("unexpected EOF")},
+			"response cut off: your local app stopped sending: unexpected EOF"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := describeCutOff(tt.body); got != tt.want {
+				t.Errorf("describeCutOff() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestE2E_RequestLogShowsResponsesCutOff(t *testing.T) {
+	// The app promises more than it sends, then hangs up
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, brw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		brw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial")
+		brw.Flush()
+	}))
+
+	// The visitor sees the connection drop; only the log explains why
+	req, _ := http.NewRequest(http.MethodGet, tt.public.URL+"/partial", nil)
+	req.Host = tt.host()
+	if resp, err := tt.public.Client().Do(req); err == nil {
+		io.ReadAll(resp.Body)
+		resp.Body.Close()
+	}
+	waitFor(t, "cut-off response in the request log", func() bool {
+		out := tt.sessionText()
+		return strings.Contains(out, "/partial") &&
+			strings.Contains(out, "↳ response cut off: your local app stopped sending: unexpected EOF")
 	})
 }

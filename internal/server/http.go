@@ -119,6 +119,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestStart := time.Now()
 	target := r.URL.RequestURI()
 	var proxyErr error
+	var body *limitedReadCloser // the response body, once the app responds
 	r = r.WithContext(tunnel.WithOrigin(r.Context(), originAddr(client, r.RemoteAddr)))
 	dw, r, stopDeadlines := newProxyDeadlines(w, r, config.ProxyIdleTimeout)
 	defer stopDeadlines()
@@ -151,10 +152,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return fmt.Errorf("%w: %d bytes (max %d)", errResponseTooLarge, resp.ContentLength, config.MaxResponseBodySize)
 			}
 			// Wrap body with size limiter for chunked/unknown-length responses
-			resp.Body = &limitedReadCloser{
+			body = &limitedReadCloser{
 				rc:    resp.Body,
 				limit: config.MaxResponseBodySize,
 			}
+			resp.Body = body
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -169,18 +171,30 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	proxy.ServeHTTP(sw, r)
+	// ReverseProxy panics with http.ErrAbortHandler when the response body
+	// can't be copied, so log from a deferred call that sees the panic
+	defer func() {
+		p := recover()
+		detail := describeProxyError(proxyErr)
+		if p != nil {
+			detail = describeCutOff(body)
+		}
+		logEntry(tun, tunnel.Entry{
+			Time:    requestStart,
+			Method:  r.Method,
+			Target:  target,
+			Status:  sw.status,
+			Bytes:   sw.bytes,
+			Latency: time.Since(requestStart),
+			Visitor: client.Addr.String(),
+			Detail:  detail,
+		})
+		if p != nil {
+			panic(p)
+		}
+	}()
 
-	logEntry(tun, tunnel.Entry{
-		Time:    requestStart,
-		Method:  r.Method,
-		Target:  target,
-		Status:  sw.status,
-		Bytes:   sw.bytes,
-		Latency: time.Since(requestStart),
-		Visitor: client.Addr.String(),
-		Detail:  describeProxyError(proxyErr),
-	})
+	proxy.ServeHTTP(sw, r)
 }
 
 // logEntry writes e to the tunnel's request log, if its SSH session has one.
@@ -227,6 +241,25 @@ func describeProxyError(err error) string {
 		return "canceled: the visitor left, or no data for " + tunnel.FormatDuration(config.ProxyIdleTimeout)
 	default:
 		return "couldn't get a response from your local app: " + err.Error()
+	}
+}
+
+// describeCutOff explains why a response stopped partway through, given its
+// body, for the tunnel owner's request log.
+func describeCutOff(body *limitedReadCloser) string {
+	var err error
+	if body != nil {
+		err = body.err
+	}
+	switch {
+	case errors.Is(err, errResponseTooLarge):
+		return fmt.Sprintf("response larger than %s, cut off", tunnel.FormatBytes(config.MaxResponseBodySize))
+	case err == nil, errors.Is(err, context.Canceled):
+		// Reading from the app didn't fail on its own, so sending to the
+		// visitor failed or the request was canceled
+		return "response cut off: the visitor left, or no data for " + tunnel.FormatDuration(config.ProxyIdleTimeout)
+	default:
+		return "response cut off: your local app stopped sending: " + err.Error()
 	}
 }
 
@@ -478,9 +511,18 @@ type limitedReadCloser struct {
 	rc    io.ReadCloser
 	limit int64
 	read  int64
+	err   error // the first read error other than io.EOF
 }
 
 func (l *limitedReadCloser) Read(p []byte) (n int, err error) {
+	n, err = l.read1(p)
+	if err != nil && err != io.EOF && l.err == nil {
+		l.err = err
+	}
+	return n, err
+}
+
+func (l *limitedReadCloser) read1(p []byte) (n int, err error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
