@@ -187,8 +187,6 @@ func (at *AbuseTracker) cleanup() {
 
 			now := time.Now()
 			windowStart := now.Add(-config.ConnectionRateWindow)
-			// Use 2x window for stale data cleanup
-			staleThreshold := now.Add(-2 * config.ConnectionRateWindow)
 
 			// Clean up connection times
 			for ip, times := range at.connectionTimes {
@@ -201,13 +199,7 @@ func (at *AbuseTracker) cleanup() {
 				if len(validTimes) == 0 {
 					delete(at.connectionTimes, ip)
 				} else {
-					// Also clean up if most recent connection is too old
-					mostRecent := validTimes[len(validTimes)-1]
-					if mostRecent.Before(staleThreshold) {
-						delete(at.connectionTimes, ip)
-					} else {
-						at.connectionTimes[ip] = validTimes
-					}
+					at.connectionTimes[ip] = validTimes
 				}
 			}
 
