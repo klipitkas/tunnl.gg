@@ -43,7 +43,7 @@ func (s *Server) GetStats(includeSubdomains bool) Stats {
 
 	stats := Stats{
 		ActiveTunnels:    len(s.tunnels),
-		UniqueIPs:        len(s.ipConnections),
+		UniqueIPs:        len(s.sshConns),
 		TotalConnections: atomic.LoadUint64(&s.totalConnections),
 		TotalRequests:    atomic.LoadUint64(&s.totalRequests),
 		ActiveWebSockets: s.wsPerTunnel.total(),

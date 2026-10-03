@@ -50,7 +50,9 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	defer sshConn.Close()
 
 	// Check rate limits and reservations after handshake
-	if err := s.CheckAndReserveConnection(clientIP); err != nil {
+	acct := connAccount(sshConn)
+	slot, err := s.CheckAndReserveConnection(clientIP, acct)
+	if err != nil {
 		log.Printf("Connection rejected from %s: %v", clientIP, err)
 		// Discard global requests to avoid goroutine leak
 		go ssh.DiscardRequests(reqs)
@@ -58,22 +60,29 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		s.sendErrorAndClose(sshConn, chans, err.Error())
 		return
 	}
-	// Connection slot reserved - must decrement on exit
-	defer s.DecrementIPConnection(clientIP)
+	// Connection slot reserved - must release on exit
+	defer s.ReleaseConnection(slot)
 
-	// Track SSH connection for forced closure on IP block
+	// Track SSH connection for forced closure on IP block, or when its
+	// account is closed
 	s.RegisterSSHConn(clientIP, sshConn)
 	defer s.UnregisterSSHConn(clientIP, sshConn)
+	limits := config.FreeLimits()
+	if acct != nil {
+		limits = acct.Limits
+		s.addConn(s.accountConns, acct.ID, sshConn)
+		defer s.removeConn(s.accountConns, acct.ID, sshConn)
+	}
 
 	s.IncrementConnections()
 
 	// Clients that connected as the stable user with a key get the key's
-	// subdomain; everyone else, or a stable client whose subdomain is held by a
-	// different key, gets a random one
+	// subdomain, and accounts their reserved one or the key's; everyone else,
+	// or a client whose subdomain is held by someone else, gets a random one
 	sub, stable := "", false
 	if perms := sshConn.Permissions; perms != nil && perms.Extensions[permStableSubdomain] != "" {
 		sub = perms.Extensions[permStableSubdomain]
-		stable = s.claimStableSubdomain(sub, sshConn, perms.Extensions[permKeyFingerprint])
+		stable = s.claimStableSubdomain(sub, sshConn, perms.Extensions[permOwner])
 	}
 	if !stable {
 		var err error
@@ -83,7 +92,11 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		}
 	}
 	defer s.RemoveTunnel(sub, sshConn)
-	log.Printf("New SSH connection from %s, assigned subdomain: %s (stable: %v)", sshConn.RemoteAddr(), sub, stable)
+	if acct != nil {
+		log.Printf("New SSH connection from %s, assigned subdomain: %s (stable: %v, account: %s)", sshConn.RemoteAddr(), sub, stable, acct.ID)
+	} else {
+		log.Printf("New SSH connection from %s, assigned subdomain: %s (stable: %v)", sshConn.RemoteAddr(), sub, stable)
+	}
 
 	var bindAddr string
 	var bindPort uint32
@@ -115,7 +128,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 					}
 					bindAddr = fwdReq.BindAddr
 					bindPort = fwdReq.BindPort
-					t := s.RegisterTunnel(sub, sshConn, bindAddr, bindPort, clientIP, config.FreeLimits())
+					t := s.RegisterTunnel(sub, sshConn, bindAddr, bindPort, clientIP, limits)
 					if t == nil {
 						// The connection is already being cleaned up
 						req.Reply(false, nil)
@@ -144,8 +157,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	}
 
 	url := fmt.Sprintf("https://%s.%s", sub, s.domain)
-	limits := tun.Limits
-	urlMessage := sessionBanner(url, s.domain, stable, limits)
+	urlMessage := sessionBanner(url, s.domain, urlNote(stable, acct), limits)
 
 	// endSession tells the user why the session is ending, with a summary of
 	// its traffic, then closes the connection
@@ -291,13 +303,9 @@ const (
 
 // sessionBanner is shown when a tunnel goes live: its URL, expiry, a QR code
 // of the URL, and the header of the request log that follows.
-func sessionBanner(url, domain string, stable bool, limits config.Limits) string {
+func sessionBanner(url, domain, urlNote string, limits config.Limits) string {
 	label := func(name string) string {
 		return bannerGray + fmt.Sprintf("  %-9s", name) + bannerReset
-	}
-	urlNote := "random: connect as " + config.StableSSHUser + "@ to keep the same URL"
-	if stable {
-		urlNote = "stays the same for your SSH key"
 	}
 
 	banner := "\r\n" +
@@ -311,6 +319,18 @@ func sessionBanner(url, domain string, stable bool, limits config.Limits) string
 		banner += code + "\r\n"
 	}
 	return banner + bannerGray + "  Requests appear below. Press Ctrl+C to stop." + bannerReset + "\r\n\r\n" + tunnel.Header()
+}
+
+// urlNote explains in the session banner whether the URL stays the same.
+func urlNote(stable bool, acct *Account) string {
+	switch {
+	case stable && acct != nil && acct.Subdomain != "":
+		return "reserved for your account"
+	case stable:
+		return "stays the same for your SSH key"
+	default:
+		return "random: connect as " + config.StableSSHUser + "@ to keep the same URL"
+	}
 }
 
 // expiryText describes when a tunnel with these limits closes.

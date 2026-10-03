@@ -12,16 +12,16 @@ func TestCheckAndReserveConnection_CapacityCountsReservations(t *testing.T) {
 
 	// Reserve every slot from distinct IPs without registering any tunnels
 	for i := 0; i < config.MaxTotalTunnels; i++ {
-		if err := s.CheckAndReserveConnection(fmt.Sprintf("10.0.%d.%d", i/256, i%256)); err != nil {
+		if _, err := s.CheckAndReserveConnection(fmt.Sprintf("10.0.%d.%d", i/256, i%256), nil); err != nil {
 			t.Fatalf("reservation %d: %v", i+1, err)
 		}
 	}
-	if err := s.CheckAndReserveConnection("192.0.2.1"); err == nil {
+	if _, err := s.CheckAndReserveConnection("192.0.2.1", nil); err == nil {
 		t.Fatal("reservation over capacity should fail even before tunnels are registered")
 	}
 
-	s.DecrementIPConnection("10.0.0.0")
-	if err := s.CheckAndReserveConnection("192.0.2.1"); err != nil {
+	s.ReleaseConnection("10.0.0.0")
+	if _, err := s.CheckAndReserveConnection("192.0.2.1", nil); err != nil {
 		t.Errorf("reservation after releasing a slot: %v", err)
 	}
 }

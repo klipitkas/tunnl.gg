@@ -65,7 +65,7 @@ func TestAuthPublicKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authPublicKey() should accept any key for %q: %v", config.StableSSHUser, err)
 	}
-	if got := perms.Extensions[permKeyFingerprint]; got != ssh.FingerprintSHA256(key) {
+	if got := perms.Extensions[permOwner]; got != ssh.FingerprintSHA256(key) {
 		t.Errorf("fingerprint = %q, want %q", got, ssh.FingerprintSHA256(key))
 	}
 	if sub := perms.Extensions[permStableSubdomain]; !subdomain.IsValid(sub) {
@@ -73,7 +73,7 @@ func TestAuthPublicKey(t *testing.T) {
 	}
 
 	if _, err := s.authPublicKey(fakeConnMetadata{user: "anyone"}, key); err == nil {
-		t.Error("authPublicKey() should only be used by the stable user")
+		t.Error("authPublicKey() should only be used by the stable and account users")
 	}
 }
 

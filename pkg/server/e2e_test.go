@@ -51,7 +51,7 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-var publicURLPattern = regexp.MustCompile(`https://([a-z]+-[a-z]+-[0-9a-f]{8})\.`)
+var publicURLPattern = regexp.MustCompile(`https://([a-z0-9-]+)\.`)
 
 // startSSHServer starts a server accepting SSH connections and returns its address.
 func startSSHServer(t *testing.T) (*Server, string) {

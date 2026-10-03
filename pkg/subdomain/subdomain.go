@@ -99,3 +99,19 @@ func IsValid(s string) bool {
 
 	return true
 }
+
+// IsLabel checks if s can be a subdomain at all: a DNS label of 1 to 63
+// lowercase letters, digits and hyphens that doesn't start or end with a
+// hyphen. Generated subdomains are labels, and so are the ones a hosted
+// deployment reserves for accounts.
+func IsLabel(s string) bool {
+	if len(s) == 0 || len(s) > 63 || s[0] == '-' || s[len(s)-1] == '-' {
+		return false
+	}
+	for _, c := range s {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+	return true
+}

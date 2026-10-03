@@ -13,37 +13,45 @@ import (
 
 // Permission extensions set during SSH authentication.
 const (
-	permKeyFingerprint  = "key-fingerprint"
+	permOwner           = "owner" // who may take over the stable subdomain: a key fingerprint or an account
 	permStableSubdomain = "stable-subdomain"
 )
 
 var errStableNeedsKey = errors.New("the stable user requires an SSH key")
 
 // authNone accepts clients without a key, as long as they didn't connect as
-// the stable user. That keeps every existing client working unchanged: it
-// never asks for a key or prompts for anything. The stable user is refused, so
-// its client falls back to offering its SSH keys.
+// the stable user, or as the account user on a server with accounts. That
+// keeps every existing client working unchanged: it never asks for a key or
+// prompts for anything. Those users are refused, so their clients fall back
+// to offering their SSH keys.
 func (s *Server) authNone(conn ssh.ConnMetadata) (*ssh.Permissions, error) {
-	if conn.User() == config.StableSSHUser {
+	switch {
+	case conn.User() == config.StableSSHUser:
 		return nil, errStableNeedsKey
+	case conn.User() == config.AccountSSHUser && s.accounts != nil:
+		return nil, errAccountNeedsKey
 	}
 	return &ssh.Permissions{}, nil
 }
 
 // authPublicKey accepts any key offered by the stable user. The key identifies
 // the client to give it a stable subdomain; it doesn't authorize anything.
-// x/crypto/ssh only grants these permissions once the client has proven it
-// holds the private key.
+// The account user is handled by authAccount instead. x/crypto/ssh only
+// grants these permissions once the client has proven it holds the private
+// key.
 func (s *Server) authPublicKey(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+	if conn.User() == config.AccountSSHUser && s.accounts != nil {
+		return s.authAccount(key)
+	}
 	if conn.User() != config.StableSSHUser {
-		return nil, errors.New("public key authentication is only used by the stable user")
+		return nil, errors.New("public key authentication is only used by the stable and account users")
 	}
 	sub, err := s.stableSubdomain(key)
 	if err != nil {
 		return nil, err
 	}
 	return &ssh.Permissions{Extensions: map[string]string{
-		permKeyFingerprint:  ssh.FingerprintSHA256(key),
+		permOwner:           ssh.FingerprintSHA256(key),
 		permStableSubdomain: sub,
 	}}, nil
 }

@@ -63,6 +63,7 @@ tunnl.gg/
 │   │   └── config.go
 │   ├── server/             # Server implementation
 │   │   ├── server.go       # Server struct, tunnel registry
+│   │   ├── accounts.go     # Optional accounts for hosted deployments
 │   │   ├── ssh.go          # SSH connection handling
 │   │   ├── http.go         # HTTP/HTTPS handlers
 │   │   ├── stats.go        # Stats tracking and endpoint

@@ -2,6 +2,7 @@ package subdomain
 
 import (
 	"crypto/sha256"
+	"strings"
 	"testing"
 )
 
@@ -78,5 +79,30 @@ func TestFromHash(t *testing.T) {
 	}
 	if _, err := FromHash(sum[:5]); err == nil {
 		t.Error("FromHash() should reject hashes shorter than 6 bytes")
+	}
+}
+
+func TestIsLabel(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"happy-tiger-a1b2c3d4", true},
+		{"myapp", true},
+		{"my-app-2", true},
+		{"a", true},
+		{strings.Repeat("a", 63), true},
+		{"", false},
+		{strings.Repeat("a", 64), false},
+		{"-myapp", false},
+		{"myapp-", false},
+		{"MyApp", false},
+		{"my_app", false},
+		{"my.app", false},
+	}
+	for _, tt := range tests {
+		if got := IsLabel(tt.input); got != tt.want {
+			t.Errorf("IsLabel(%q) = %v, want %v", tt.input, got, tt.want)
+		}
 	}
 }

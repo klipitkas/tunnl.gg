@@ -29,17 +29,19 @@ type sshConnection interface {
 // reserved until its tunnel is removed.
 type subdomainOwner struct {
 	conn  sshConnection
-	keyFP string // client key fingerprint for a stable subdomain, "" for a random one
+	owner string // who may take a stable subdomain over (see permOwner), "" for a random one
 }
 
 // Server manages SSH tunnels and HTTP proxying
 type Server struct {
 	tunnels         map[string]*tunnel.Tunnel
 	owners          map[string]subdomainOwner // every reserved or registered subdomain
-	ipConnections   map[string]int            // reserved connection slots per IP
+	slots           map[string]int            // reserved connection slots per IP or account
 	totalReserved   int                       // reserved connection slots server-wide
 	newSubdomain    func() (string, error)
 	sshConns        map[string][]*ssh.ServerConn // SSH connections per IP for forced closure
+	accountConns    map[string][]*ssh.ServerConn // SSH connections per account ID for forced closure
+	accounts        AccountStore                 // nil unless the deployment has accounts
 	mu              sync.RWMutex
 	sshConfig       *ssh.ServerConfig
 	domain          string
@@ -67,8 +69,9 @@ func New(hostKeyPath string, domain string) (*Server, error) {
 		tunnels:       make(map[string]*tunnel.Tunnel),
 		owners:        make(map[string]subdomainOwner),
 		newSubdomain:  subdomain.Generate,
-		ipConnections: make(map[string]int),
+		slots:         make(map[string]int),
 		sshConns:      make(map[string][]*ssh.ServerConn),
+		accountConns:  make(map[string][]*ssh.ServerConn),
 		abuseTracker:  NewAbuseTracker(),
 		wsPerTunnel:   newConnLimiter(config.MaxWebSocketsPerTunnel),
 		wsPerVisitor:  newConnLimiter(config.MaxWebSocketsPerVisitor),
@@ -161,65 +164,74 @@ func (s *Server) ReserveSubdomain(conn sshConnection) (string, error) {
 	return "", fmt.Errorf("failed to generate unique subdomain after %d attempts", maxAttempts)
 }
 
-// claimSubdomain reserves sub for conn, whose client key has fingerprint
-// keyFP, if sub is free. If it is held by a connection with the same key,
-// that connection is returned so the caller can replace it. Otherwise sub is
-// held by someone else and neither is returned.
-func (s *Server) claimSubdomain(sub string, conn sshConnection, keyFP string) (holder sshConnection, ok bool) {
+// claimSubdomain reserves sub for conn, on behalf of owner (see permOwner),
+// if sub is free. If it is held by a connection with the same owner, that
+// connection is returned so the caller can replace it. Otherwise sub is held
+// by someone else and neither is returned.
+func (s *Server) claimSubdomain(sub string, conn sshConnection, owner string) (holder sshConnection, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	owner, held := s.owners[sub]
+	current, held := s.owners[sub]
 	if !held {
-		s.owners[sub] = subdomainOwner{conn: conn, keyFP: keyFP}
+		s.owners[sub] = subdomainOwner{conn: conn, owner: owner}
 		return nil, true
 	}
-	if keyFP != "" && owner.keyFP == keyFP {
-		return owner.conn, false
+	if owner != "" && current.owner == owner {
+		return current.conn, false
 	}
 	return nil, false
 }
 
-// CheckAndReserveConnection checks if a new connection from the given IP is allowed
-// and atomically reserves a slot if allowed. Returns true if reservation was made.
-// Caller MUST call DecrementIPConnection when done if this returns nil.
-func (s *Server) CheckAndReserveConnection(clientIP string) error {
+// CheckAndReserveConnection checks if a new connection from the given IP, on
+// behalf of acct if it isn't nil, is allowed and atomically reserves a slot if
+// so. Anonymous clients are limited per IP, accounts per account. If it
+// returns no error, the caller MUST call ReleaseConnection with the returned
+// slot when done.
+func (s *Server) CheckAndReserveConnection(clientIP string, acct *Account) (slot string, err error) {
 	// Check if IP is blocked
 	if expiry := s.abuseTracker.GetBlockExpiry(clientIP); !expiry.IsZero() {
 		remaining := time.Until(expiry).Round(time.Minute)
-		return fmt.Errorf("IP %s is temporarily blocked. Try again in %v", clientIP, remaining)
+		return "", fmt.Errorf("IP %s is temporarily blocked. Try again in %v", clientIP, remaining)
 	}
 
 	// Check connection rate limit
 	if !s.abuseTracker.CheckConnectionRate(clientIP) {
-		return fmt.Errorf("connection rate limit exceeded: max %d connections per minute. Repeated violations will result in a temporary block", config.MaxConnectionsPerMinute)
+		return "", fmt.Errorf("connection rate limit exceeded: max %d connections per minute. Repeated violations will result in a temporary block", config.MaxConnectionsPerMinute)
+	}
+
+	// A zero limit means no limit for accounts. The prefix keeps account IDs
+	// from colliding with IPs.
+	slot, limit, per := clientIP, config.FreeLimits().MaxTunnels, "IP"
+	if acct != nil {
+		slot, limit, per = "account:"+acct.ID, acct.Limits.MaxTunnels, "account"
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.ipConnections[clientIP] >= config.MaxTunnelsPerIP {
-		return fmt.Errorf("rate limit exceeded: max %d tunnels per IP", config.MaxTunnelsPerIP)
+	if limit > 0 && s.slots[slot] >= limit {
+		return "", fmt.Errorf("rate limit exceeded: max %d tunnels per %s", limit, per)
 	}
 	// Count reservations rather than registered tunnels, since tunnels are
 	// registered later and concurrent connections could otherwise overshoot
 	if s.totalReserved >= config.MaxTotalTunnels {
-		return fmt.Errorf("server capacity reached: max %d total tunnels", config.MaxTotalTunnels)
+		return "", fmt.Errorf("server capacity reached: max %d total tunnels", config.MaxTotalTunnels)
 	}
 
 	// Atomically reserve the connection slot
-	s.ipConnections[clientIP]++
+	s.slots[slot]++
 	s.totalReserved++
-	return nil
+	return slot, nil
 }
 
-// DecrementIPConnection decrements the connection count for an IP
-func (s *Server) DecrementIPConnection(clientIP string) {
+// ReleaseConnection releases a slot reserved by CheckAndReserveConnection.
+func (s *Server) ReleaseConnection(slot string) {
 	s.mu.Lock()
-	s.ipConnections[clientIP]--
+	s.slots[slot]--
 	s.totalReserved--
-	if s.ipConnections[clientIP] <= 0 {
-		delete(s.ipConnections, clientIP)
+	if s.slots[slot] <= 0 {
+		delete(s.slots, slot)
 	}
 	s.mu.Unlock()
 }
@@ -265,53 +277,66 @@ func (s *Server) GetTunnel(sub string) *tunnel.Tunnel {
 
 // RegisterSSHConn registers an SSH connection for an IP (for forced closure on block)
 func (s *Server) RegisterSSHConn(clientIP string, conn *ssh.ServerConn) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sshConns[clientIP] = append(s.sshConns[clientIP], conn)
+	s.addConn(s.sshConns, clientIP, conn)
 }
 
 // UnregisterSSHConn removes an SSH connection from tracking
 func (s *Server) UnregisterSSHConn(clientIP string, conn *ssh.ServerConn) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	conns := s.sshConns[clientIP]
-	// Build new slice without the target connection
-	newConns := make([]*ssh.ServerConn, 0, len(conns))
-	for _, c := range conns {
-		if c != conn {
-			newConns = append(newConns, c)
-		}
-	}
-
-	if len(newConns) == 0 {
-		delete(s.sshConns, clientIP)
-	} else {
-		s.sshConns[clientIP] = newConns
-	}
+	s.removeConn(s.sshConns, clientIP, conn)
 }
 
 // CloseAllForIP closes all SSH connections for a specific IP
 // Closing SSH connections triggers cleanup which removes tunnels via defers
 // Returns the number of connections closed
 func (s *Server) CloseAllForIP(ip string) int {
-	// Collect connections while holding the lock
-	s.mu.Lock()
-	sshConns := s.sshConns[ip]
-	// Make a copy of the slice since we'll modify the map after releasing lock
-	connsCopy := make([]*ssh.ServerConn, len(sshConns))
-	copy(connsCopy, sshConns)
-	// Remove from map now to prevent double-close attempts
-	delete(s.sshConns, ip)
-	s.mu.Unlock()
+	return closeConns(s.takeConns(s.sshConns, ip))
+}
 
-	// Close connections outside the lock to avoid deadlock
-	// The cleanup handlers (UnregisterSSHConn) will be no-ops since we already removed from map
-	for _, conn := range connsCopy {
-		conn.Close()
+// addConn adds conn to the connections tracked under key in conns.
+func (s *Server) addConn(conns map[string][]*ssh.ServerConn, key string, conn *ssh.ServerConn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	conns[key] = append(conns[key], conn)
+}
+
+// removeConn stops tracking conn under key in conns.
+func (s *Server) removeConn(conns map[string][]*ssh.ServerConn, key string, conn *ssh.ServerConn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Build new slice without the target connection
+	kept := make([]*ssh.ServerConn, 0, len(conns[key]))
+	for _, c := range conns[key] {
+		if c != conn {
+			kept = append(kept, c)
+		}
 	}
 
-	return len(connsCopy)
+	if len(kept) == 0 {
+		delete(conns, key)
+	} else {
+		conns[key] = kept
+	}
+}
+
+// takeConns stops tracking the connections under key in conns and returns
+// them. Removing them now prevents double-close attempts; their cleanup
+// handlers' removeConn calls become no-ops.
+func (s *Server) takeConns(conns map[string][]*ssh.ServerConn, key string) []*ssh.ServerConn {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	taken := conns[key]
+	delete(conns, key)
+	return taken
+}
+
+// closeConns closes conns, which triggers their cleanup, and returns how
+// many there were. Callers must not hold s.mu, since cleanup takes it.
+func closeConns(conns []*ssh.ServerConn) int {
+	for _, conn := range conns {
+		conn.Close()
+	}
+	return len(conns)
 }
 
 // Stop gracefully stops the server's background goroutines

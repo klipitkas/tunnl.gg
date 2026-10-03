@@ -46,7 +46,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	sub := strings.TrimSuffix(host, "."+domain)
 
-	if !subdomain.IsValid(sub) {
+	if !subdomain.IsLabel(sub) {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
