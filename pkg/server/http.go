@@ -72,7 +72,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.IncrementRequests()
 
 	// Show interstitial warning for browser requests
-	if isBrowserRequest(r) &&
+	if tun.Limits.BrowserWarning && isBrowserRequest(r) &&
 		r.Header.Get("tunnl-skip-browser-warning") == "" &&
 		!hasWarningCookie(r, sub) {
 		logTunnlEvent(tun, r, client, http.StatusTemporaryRedirect, "browser sent to the warning page")

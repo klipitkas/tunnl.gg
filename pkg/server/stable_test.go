@@ -127,14 +127,14 @@ func TestRemoveTunnel_OnlyByOwner(t *testing.T) {
 	owner, previous := &fakeSSHConn{}, &fakeSSHConn{}
 	const sub = "happy-tiger-00000001"
 	s.claimSubdomain(sub, owner, "SHA256:a")
-	s.RegisterTunnel(sub, owner, "localhost", 80, "192.0.2.1")
+	s.RegisterTunnel(sub, owner, "localhost", 80, "192.0.2.1", config.FreeLimits())
 
 	// A replaced connection's cleanup runs after the new owner registered
 	s.RemoveTunnel(sub, previous)
 	if s.GetTunnel(sub) == nil {
 		t.Fatal("cleanup by a previous owner removed the new owner's tunnel")
 	}
-	if tun := s.RegisterTunnel(sub, previous, "localhost", 80, "192.0.2.1"); tun != nil {
+	if tun := s.RegisterTunnel(sub, previous, "localhost", 80, "192.0.2.1", config.FreeLimits()); tun != nil {
 		t.Error("a connection that doesn't hold the subdomain registered a tunnel under it")
 	}
 

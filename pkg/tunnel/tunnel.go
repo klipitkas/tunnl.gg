@@ -19,7 +19,8 @@ type Tunnel struct {
 	inFlight       int // requests and WebSockets currently open
 	BindAddr       string
 	BindPort       uint32
-	ClientIP       string // SSH client IP that created this tunnel
+	ClientIP       string        // SSH client IP that created this tunnel
+	Limits         config.Limits // set before the tunnel is shared, then read-only
 	mu             sync.Mutex
 	rateLimiter    *RateLimiter      // Tunnel-wide rate limit across all visitors
 	visitorLimiter *KeyedRateLimiter // Per-visitor rate limit
@@ -39,6 +40,7 @@ func New(subdomain string, opener ChannelOpener, bindAddr string, bindPort uint3
 		BindAddr:     bindAddr,
 		BindPort:     bindPort,
 		ClientIP:     clientIP,
+		Limits:       config.FreeLimits(),
 		rateLimiter:  NewRateLimiter(config.RequestsPerSecond, config.BurstSize),
 		pendingOpens: make(chan struct{}, config.MaxPendingChannelOpens),
 		visitorLimiter: NewKeyedRateLimiter(
@@ -82,12 +84,14 @@ func (t *Tunnel) BeginRequest() (end func()) {
 }
 
 // IsExpired returns true if the tunnel has been inactive for too long or exceeded max lifetime.
-// A tunnel with requests or WebSockets in flight is never inactive.
+// A tunnel with requests or WebSockets in flight is never inactive. Limits
+// that are zero don't apply.
 func (t *Tunnel) IsExpired() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return (t.inFlight == 0 && time.Since(t.LastActive) > config.InactivityTimeout) ||
-		time.Since(t.CreatedAt) > config.MaxTunnelLifetime
+	idle, lifetime := t.Limits.InactivityTimeout, t.Limits.MaxLifetime
+	return (idle > 0 && t.inFlight == 0 && time.Since(t.LastActive) > idle) ||
+		(lifetime > 0 && time.Since(t.CreatedAt) > lifetime)
 }
 
 // AllowRequest checks if a request from visitor is allowed by the rate limiters.

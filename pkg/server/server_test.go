@@ -58,7 +58,7 @@ func TestRegisterTunnel_RequiresReservation(t *testing.T) {
 	// The connection gave up waiting and cleaned up before registering
 	s.RemoveTunnel(sub, nil)
 
-	if tun := s.RegisterTunnel(sub, nil, "localhost", 80, "192.0.2.1"); tun != nil {
+	if tun := s.RegisterTunnel(sub, nil, "localhost", 80, "192.0.2.1", config.FreeLimits()); tun != nil {
 		t.Error("RegisterTunnel() should refuse a subdomain whose reservation was released")
 	}
 	if s.GetTunnel(sub) != nil {

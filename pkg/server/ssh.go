@@ -115,7 +115,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 					}
 					bindAddr = fwdReq.BindAddr
 					bindPort = fwdReq.BindPort
-					t := s.RegisterTunnel(sub, sshConn, bindAddr, bindPort, clientIP)
+					t := s.RegisterTunnel(sub, sshConn, bindAddr, bindPort, clientIP, config.FreeLimits())
 					if t == nil {
 						// The connection is already being cleaned up
 						req.Reply(false, nil)
@@ -144,7 +144,8 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	}
 
 	url := fmt.Sprintf("https://%s.%s", sub, s.domain)
-	urlMessage := sessionBanner(url, s.domain, stable)
+	limits := tun.Limits
+	urlMessage := sessionBanner(url, s.domain, stable, limits)
 
 	// endSession tells the user why the session is ending, with a summary of
 	// its traffic, then closes the connection
@@ -171,18 +172,20 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		for {
 			select {
 			case <-ticker.C:
-				remaining := time.Until(tun.CreatedAt.Add(config.MaxTunnelLifetime))
-				if !warned && remaining > 0 && remaining <= lifetimeWarning {
+				// A zero MaxLifetime means no lifetime limit
+				remaining := time.Until(tun.CreatedAt.Add(limits.MaxLifetime))
+				hasLifetime := limits.MaxLifetime > 0
+				if hasLifetime && !warned && remaining > 0 && remaining <= lifetimeWarning {
 					warned = true
 					if logger := tun.Logger(); logger != nil {
 						logger.Notice(fmt.Sprintf("This tunnel closes in %s (%s limit). %s",
-							formatDuration(remaining.Round(time.Minute)), formatDuration(config.MaxTunnelLifetime), reconnectHint))
+							formatDuration(remaining.Round(time.Minute)), formatDuration(limits.MaxLifetime), reconnectHint))
 					}
 				}
 				if tun.IsExpired() {
-					reason := "Tunnel closed after " + formatDuration(config.InactivityTimeout) + " without traffic"
-					if remaining <= 0 {
-						reason = "Tunnel closed: reached the " + formatDuration(config.MaxTunnelLifetime) + " limit"
+					reason := "Tunnel closed after " + formatDuration(limits.InactivityTimeout) + " without traffic"
+					if hasLifetime && remaining <= 0 {
+						reason = "Tunnel closed: reached the " + formatDuration(limits.MaxLifetime) + " limit"
 					}
 					log.Printf("Tunnel %s expired: %s", sub, reason)
 					endSession(reason)
@@ -288,7 +291,7 @@ const (
 
 // sessionBanner is shown when a tunnel goes live: its URL, expiry, a QR code
 // of the URL, and the header of the request log that follows.
-func sessionBanner(url, domain string, stable bool) string {
+func sessionBanner(url, domain string, stable bool, limits config.Limits) string {
 	label := func(name string) string {
 		return bannerGray + fmt.Sprintf("  %-9s", name) + bannerReset
 	}
@@ -301,14 +304,28 @@ func sessionBanner(url, domain string, stable bool) string {
 		bannerGreen + "  ● Tunnel is live" + bannerReset + bannerGray + " on " + domain + bannerReset + "\r\n\r\n" +
 		label("URL") + bannerPurple + url + bannerReset + "\r\n" +
 		label("") + bannerGray + urlNote + bannerReset + "\r\n" +
-		label("Expires") + "in " + formatDuration(config.MaxTunnelLifetime) +
-		", or after " + formatDuration(config.InactivityTimeout) + " without traffic\r\n\r\n"
+		label("Expires") + expiryText(limits) + "\r\n\r\n"
 
 	// QR code of the URL, for opening the tunnel on a phone
 	if code, err := renderQR(url, "  "); err == nil {
 		banner += code + "\r\n"
 	}
 	return banner + bannerGray + "  Requests appear below. Press Ctrl+C to stop." + bannerReset + "\r\n\r\n" + tunnel.Header()
+}
+
+// expiryText describes when a tunnel with these limits closes.
+func expiryText(limits config.Limits) string {
+	idle := "after " + formatDuration(limits.InactivityTimeout) + " without traffic"
+	switch {
+	case limits.MaxLifetime > 0 && limits.InactivityTimeout > 0:
+		return "in " + formatDuration(limits.MaxLifetime) + ", or " + idle
+	case limits.MaxLifetime > 0:
+		return "in " + formatDuration(limits.MaxLifetime)
+	case limits.InactivityTimeout > 0:
+		return idle
+	default:
+		return "never"
+	}
 }
 
 // stableTakeoverTimeout bounds how long a new connection waits for an older

@@ -85,6 +85,26 @@ const (
 	WarningCookieMaxAge = 86400 // 1 day
 )
 
+// Limits are the limits and features that apply to a client's tunnels.
+// Anonymous clients get FreeLimits; a hosted deployment can give accounts
+// others.
+type Limits struct {
+	MaxTunnels        int           // tunnels open at once per client IP, or per account
+	InactivityTimeout time.Duration // closes a tunnel after this long without traffic; 0 means never
+	MaxLifetime       time.Duration // closes a tunnel after this long regardless of activity; 0 means never
+	BrowserWarning    bool          // browsers see the warning page before reaching the tunnel
+}
+
+// FreeLimits returns the limits for anonymous clients.
+func FreeLimits() Limits {
+	return Limits{
+		MaxTunnels:        MaxTunnelsPerIP,
+		InactivityTimeout: InactivityTimeout,
+		MaxLifetime:       MaxTunnelLifetime,
+		BrowserWarning:    true,
+	}
+}
+
 // Config holds runtime configuration loaded from environment
 type Config struct {
 	SSHAddr     string

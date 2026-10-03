@@ -224,10 +224,11 @@ func (s *Server) DecrementIPConnection(clientIP string) {
 	s.mu.Unlock()
 }
 
-// RegisterTunnel registers a tunnel for conn under a subdomain it reserved. It
-// returns nil if conn no longer holds sub, so a late registration can't outlive
-// its connection's cleanup or take over another connection's subdomain.
-func (s *Server) RegisterTunnel(sub string, conn sshConnection, bindAddr string, bindPort uint32, clientIP string) *tunnel.Tunnel {
+// RegisterTunnel registers a tunnel for conn, with the given limits, under a
+// subdomain it reserved. It returns nil if conn no longer holds sub, so a late
+// registration can't outlive its connection's cleanup or take over another
+// connection's subdomain.
+func (s *Server) RegisterTunnel(sub string, conn sshConnection, bindAddr string, bindPort uint32, clientIP string, limits config.Limits) *tunnel.Tunnel {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -235,6 +236,7 @@ func (s *Server) RegisterTunnel(sub string, conn sshConnection, bindAddr string,
 		return nil
 	}
 	t := tunnel.New(sub, conn, bindAddr, bindPort, clientIP)
+	t.Limits = limits
 	s.tunnels[sub] = t
 	return t
 }

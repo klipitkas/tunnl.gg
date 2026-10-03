@@ -476,3 +476,25 @@ func TestServeHTTP_RateLimitThrottlesVisitorWithoutPenalizingOwner(t *testing.T)
 		t.Errorf("other visitor got status %d, want %d", code, http.StatusOK)
 	}
 }
+
+func TestServeHTTP_BrowserWarningFollowsLimits(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	request := func() int {
+		req := httptest.NewRequest(http.MethodGet, "https://"+tt.sub+"."+config.DefaultDomain+"/", nil)
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		rec := httptest.NewRecorder()
+		tt.srv.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := request(); code != http.StatusTemporaryRedirect {
+		t.Errorf("browser on a free tunnel got status %d, want the warning page redirect", code)
+	}
+	tt.srv.GetTunnel(tt.sub).Limits.BrowserWarning = false
+	if code := request(); code != http.StatusOK {
+		t.Errorf("browser on a tunnel without the warning got status %d, want %d", code, http.StatusOK)
+	}
+}

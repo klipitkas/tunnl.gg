@@ -161,3 +161,16 @@ func TestClose_DetachesLoggerWithoutWaiting(t *testing.T) {
 		t.Error("Close() should detach the logger so requests stop logging to a closed session")
 	}
 }
+
+func TestIsExpired_ZeroLimitsDontApply(t *testing.T) {
+	tun := newTestTunnel(t)
+	tun.Limits = config.Limits{}
+	tun.mu.Lock()
+	tun.CreatedAt = time.Now().Add(-48 * time.Hour)
+	tun.LastActive = time.Now().Add(-48 * time.Hour)
+	tun.mu.Unlock()
+
+	if tun.IsExpired() {
+		t.Error("tunnel without inactivity or lifetime limits should not expire")
+	}
+}
