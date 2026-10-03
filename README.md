@@ -56,7 +56,7 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 ```text
 tunnl.gg/
 ├── cmd/tunnl/              # Application entry point
-├── internal/
+├── pkg/
 │   ├── clientip/           # Visitor IP resolution behind trusted proxies
 │   │   └── clientip.go
 │   ├── config/             # Configuration and constants

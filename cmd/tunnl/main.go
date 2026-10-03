@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/klipitkas/tunnl.gg/internal/clientip"
-	"github.com/klipitkas/tunnl.gg/internal/config"
-	"github.com/klipitkas/tunnl.gg/internal/server"
+	"github.com/klipitkas/tunnl.gg/pkg/clientip"
+	"github.com/klipitkas/tunnl.gg/pkg/config"
+	"github.com/klipitkas/tunnl.gg/pkg/server"
 )
 
 // Set at build time with -ldflags "-X main.version=... -X main.commit=..."

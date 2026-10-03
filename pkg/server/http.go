@@ -17,10 +17,10 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/klipitkas/tunnl.gg/internal/clientip"
-	"github.com/klipitkas/tunnl.gg/internal/config"
-	"github.com/klipitkas/tunnl.gg/internal/subdomain"
-	"github.com/klipitkas/tunnl.gg/internal/tunnel"
+	"github.com/klipitkas/tunnl.gg/pkg/clientip"
+	"github.com/klipitkas/tunnl.gg/pkg/config"
+	"github.com/klipitkas/tunnl.gg/pkg/subdomain"
+	"github.com/klipitkas/tunnl.gg/pkg/tunnel"
 )
 
 var errResponseTooLarge = errors.New("response body too large")

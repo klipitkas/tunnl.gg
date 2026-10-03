@@ -50,7 +50,7 @@ Tunnl.gg is a minimal SSH tunneling service that exposes local applications to t
 ```text
 tunnl.gg/
 ├── cmd/tunnl/main.go           # Entry point, server initialization
-└── internal/
+└── pkg/
     ├── clientip/
     │   └── clientip.go         # Visitor IP resolution behind trusted proxies (Cloudflare, X-Forwarded-For)
     ├── config/
@@ -74,7 +74,7 @@ tunnl.gg/
 
 ## Components
 
-### 1. SSH Server (`internal/server/ssh.go`)
+### 1. SSH Server (`pkg/server/ssh.go`)
 
 Listens on port 22 (configurable) and handles remote port forwarding requests.
 
@@ -107,14 +107,14 @@ type forwardedTCPPayload struct {
 }
 ```
 
-### 2. HTTP Server (`internal/server/http.go`)
+### 2. HTTP Server (`pkg/server/http.go`)
 
 Listens on port 80 and serves two purposes:
 
 - Redirects all traffic to HTTPS (301)
 - Validates host before redirect (prevents open redirect)
 
-### 3. HTTPS Server (`internal/server/http.go`)
+### 3. HTTPS Server (`pkg/server/http.go`)
 
 Listens on port 443 with pre-configured TLS certificates.
 
@@ -131,7 +131,7 @@ Listens on port 443 with pre-configured TLS certificates.
    At most 32 channel opens per tunnel can await the client's answer; further requests wait for one (up to the 10s dial timeout).
 10. SSH client forwards to local application
 
-### 4. Stats Server (`internal/server/stats.go`)
+### 4. Stats Server (`pkg/server/stats.go`)
 
 Listens on `127.0.0.1:9090` (localhost only) and exposes metrics.
 
@@ -156,7 +156,7 @@ Listens on `127.0.0.1:9090` (localhost only) and exposes metrics.
 
 Add `?subdomains=true` to include active subdomain list.
 
-### 5. Tunnel Registry (`internal/server/server.go`)
+### 5. Tunnel Registry (`pkg/server/server.go`)
 
 Thread-safe map storing active tunnels.
 
@@ -178,7 +178,7 @@ type Server struct {
 }
 ```
 
-### 6. Tunnel (`internal/tunnel/tunnel.go`)
+### 6. Tunnel (`pkg/tunnel/tunnel.go`)
 
 Represents a single active tunnel.
 
@@ -198,7 +198,7 @@ type Tunnel struct {
 }
 ```
 
-### 7. Subdomain Generator (`internal/subdomain/subdomain.go`)
+### 7. Subdomain Generator (`pkg/subdomain/subdomain.go`)
 
 Generates memorable, random subdomains.
 
@@ -211,7 +211,7 @@ Generates memorable, random subdomains.
 - 32 adjectives × 32 nouns × 4,294,967,296 hex combinations = ~4.4 trillion possible subdomains
 - Whitelist-based validation prevents injection attacks
 
-### 8. Rate Limiter (`internal/tunnel/ratelimiter.go`)
+### 8. Rate Limiter (`pkg/tunnel/ratelimiter.go`)
 
 Token bucket rate limiting for HTTP requests. Each tunnel has two limiters:
 
@@ -230,7 +230,7 @@ Per-tunnel goroutine that checks every minute if the tunnel has been idle for 2 
 A tunnel is idle only when no requests or WebSockets are in flight, so long-lived streams and WebSockets keep it alive.
 If expired, closes the SSH connection, which triggers cleanup.
 
-### 10. Abuse Tracker (`internal/server/abuse.go`)
+### 10. Abuse Tracker (`pkg/server/abuse.go`)
 
 Tracks connection patterns and blocks abusive IPs.
 

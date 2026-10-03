@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/klipitkas/tunnl.gg/internal/config"
+	"github.com/klipitkas/tunnl.gg/pkg/config"
 )
 
 // Tunnel represents an active SSH tunnel

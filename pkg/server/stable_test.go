@@ -12,8 +12,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/klipitkas/tunnl.gg/internal/config"
-	"github.com/klipitkas/tunnl.gg/internal/subdomain"
+	"github.com/klipitkas/tunnl.gg/pkg/config"
+	"github.com/klipitkas/tunnl.gg/pkg/subdomain"
 )
 
 func newTestKey(t *testing.T) ssh.Signer {

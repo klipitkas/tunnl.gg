@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/klipitkas/tunnl.gg/internal/config"
+	"github.com/klipitkas/tunnl.gg/pkg/config"
 )
 
 func newTestTunnel(t *testing.T) *Tunnel {

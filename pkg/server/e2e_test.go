@@ -17,8 +17,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/klipitkas/tunnl.gg/internal/clientip"
-	"github.com/klipitkas/tunnl.gg/internal/config"
+	"github.com/klipitkas/tunnl.gg/pkg/clientip"
+	"github.com/klipitkas/tunnl.gg/pkg/config"
 )
 
 // testTunnel is a tunnel created by a real SSH client through HandleSSHConnection.

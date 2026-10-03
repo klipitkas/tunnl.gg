@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/klipitkas/tunnl.gg/internal/config"
+	"github.com/klipitkas/tunnl.gg/pkg/config"
 )
 
 // pipeChannel is an ssh.Channel backed by one end of a net.Pipe.

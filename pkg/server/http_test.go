@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/klipitkas/tunnl.gg/internal/config"
+	"github.com/klipitkas/tunnl.gg/pkg/config"
 )
 
 func TestStripPort(t *testing.T) {
