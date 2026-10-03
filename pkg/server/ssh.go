@@ -67,9 +67,9 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	// account is closed
 	s.RegisterSSHConn(clientIP, sshConn)
 	defer s.UnregisterSSHConn(clientIP, sshConn)
-	limits := config.FreeLimits()
+	limits, accountID := config.FreeLimits(), ""
 	if acct != nil {
-		limits = acct.Limits
+		limits, accountID = acct.Limits, acct.ID
 		s.addConn(s.accountConns, acct.ID, sshConn)
 		defer s.removeConn(s.accountConns, acct.ID, sshConn)
 	}
@@ -133,7 +133,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 					}
 					bindAddr = fwdReq.BindAddr
 					bindPort = fwdReq.BindPort
-					t := s.RegisterTunnel(sub, sshConn, bindAddr, bindPort, clientIP, limits)
+					t := s.RegisterTunnel(sub, sshConn, bindAddr, bindPort, clientIP, limits, accountID)
 					if t == nil {
 						// The connection is already being cleaned up
 						req.Reply(false, nil)

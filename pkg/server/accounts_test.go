@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -235,5 +236,43 @@ func TestE2E_CloseKeyLeavesOtherKeysOpen(t *testing.T) {
 	waitFor(t, "the stable tunnel to close", func() bool { return srv.GetTunnel(s.sub) == nil })
 	if srv.GetTunnel(b.sub) == nil {
 		t.Error("bob's tunnel should still be open")
+	}
+}
+
+func TestE2E_TunnelsAndBans(t *testing.T) {
+	srv, addr := startSSHServer(t)
+	key := newTestKey(t)
+	withAccounts(srv, []ssh.Signer{key}, []*Account{{ID: "acct_1", Limits: proLimits}})
+
+	anon := openTunnel(t, srv, addr, anonymousClient(), echoBackend("anon"))
+	paid := openTunnel(t, srv, addr, accountClient(key), echoBackend("paid"))
+	byName := map[string]TunnelInfo{}
+	for _, ti := range srv.Tunnels() {
+		byName[ti.Subdomain] = ti
+	}
+	if ti := byName[anon.sub]; ti.ClientIP != "127.0.0.1" || ti.AccountID != "" || ti.CreatedAt.IsZero() {
+		t.Errorf("anonymous tunnel = %+v", ti)
+	}
+	if ti := byName[paid.sub]; ti.AccountID != "acct_1" {
+		t.Errorf("account tunnel = %+v, want acct_1", ti)
+	}
+
+	// Banning closes the IP's tunnels and refuses it until the ban ends
+	srv.BanIP("127.0.0.1", time.Now().Add(time.Hour))
+	waitFor(t, "banned tunnels to close", func() bool { return len(srv.Tunnels()) == 0 })
+	if c, err := dialSSH(addr); err == nil {
+		c.Close()
+		t.Error("a banned IP should be refused")
+	}
+	// An automatic block can't shorten it
+	srv.abuseTracker.BlockIP("127.0.0.1")
+	if exp := srv.abuseTracker.GetBlockExpiry("127.0.0.1"); time.Until(exp) < 59*time.Minute {
+		t.Errorf("the ban was shortened to %v", time.Until(exp))
+	}
+	srv.UnbanIP("127.0.0.1")
+	if c, err := dialSSH(addr); err != nil {
+		t.Errorf("after unbanning: %v", err)
+	} else {
+		c.Close()
 	}
 }

@@ -242,7 +242,7 @@ func (s *Server) ReleaseConnection(slot string) {
 // subdomain it reserved. It returns nil if conn no longer holds sub, so a late
 // registration can't outlive its connection's cleanup or take over another
 // connection's subdomain.
-func (s *Server) RegisterTunnel(sub string, conn sshConnection, bindAddr string, bindPort uint32, clientIP string, limits config.Limits) *tunnel.Tunnel {
+func (s *Server) RegisterTunnel(sub string, conn sshConnection, bindAddr string, bindPort uint32, clientIP string, limits config.Limits, accountID string) *tunnel.Tunnel {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -251,6 +251,7 @@ func (s *Server) RegisterTunnel(sub string, conn sshConnection, bindAddr string,
 	}
 	t := tunnel.New(sub, conn, bindAddr, bindPort, clientIP)
 	t.Limits = limits
+	t.AccountID = accountID
 	s.tunnels[sub] = t
 	return t
 }
@@ -268,6 +269,37 @@ func (s *Server) RemoveTunnel(sub string, conn sshConnection) {
 		t.Close()
 		delete(s.tunnels, sub)
 	}
+}
+
+// TunnelInfo describes an open tunnel.
+type TunnelInfo struct {
+	Subdomain string
+	ClientIP  string // grouped by /64 for IPv6, like the per-IP limits
+	AccountID string // "" for anonymous clients
+	CreatedAt time.Time
+}
+
+// Tunnels lists the open tunnels, for example for abuse scanning.
+func (s *Server) Tunnels() []TunnelInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	list := make([]TunnelInfo, 0, len(s.tunnels))
+	for _, t := range s.tunnels {
+		list = append(list, TunnelInfo{Subdomain: t.Subdomain, ClientIP: t.ClientIP, AccountID: t.AccountID, CreatedAt: t.CreatedAt})
+	}
+	return list
+}
+
+// BanIP refuses SSH connections from ip until the given time and closes its
+// open ones, for abuse. IPv6 addresses are banned by /64, like the per-IP
+// limits. A ban only ever gets longer; UnbanIP lifts it.
+func (s *Server) BanIP(ip string, until time.Time) {
+	s.abuseTracker.BlockIPUntil(visitorKey(ip), until)
+}
+
+// UnbanIP lifts a ban, or an automatic block, on ip.
+func (s *Server) UnbanIP(ip string) {
+	s.abuseTracker.Unblock(visitorKey(ip))
 }
 
 // GetTunnel retrieves a tunnel by subdomain

@@ -99,12 +99,35 @@ func (at *AbuseTracker) GetBlockExpiry(ip string) time.Time {
 
 // BlockIP blocks an IP for the configured duration
 func (at *AbuseTracker) BlockIP(ip string) {
+	at.BlockIPUntil(ip, time.Now().Add(config.BlockDuration))
+}
+
+// BlockIPUntil blocks an IP until the given time and closes its
+// connections. A block only ever gets longer, so a short automatic block
+// doesn't cut a longer ban short.
+func (at *AbuseTracker) BlockIPUntil(ip string, until time.Time) {
 	at.mu.Lock()
-	at.blockedIPs[ip] = time.Now().Add(config.BlockDuration)
+	at.extendBlock(ip, until)
 	at.mu.Unlock()
 
 	at.totalBlocked.Add(1)
 	at.callOnBlock(ip)
+}
+
+// Unblock lifts an IP's block, if any.
+func (at *AbuseTracker) Unblock(ip string) {
+	at.mu.Lock()
+	delete(at.blockedIPs, ip)
+	delete(at.violationCounts, ip)
+	at.mu.Unlock()
+}
+
+// extendBlock blocks ip until the given time unless it's blocked longer
+// already. Callers hold at.mu.
+func (at *AbuseTracker) extendBlock(ip string, until time.Time) {
+	if current, ok := at.blockedIPs[ip]; !ok || until.After(current) {
+		at.blockedIPs[ip] = until
+	}
 }
 
 // CheckConnectionRate checks if a new connection from IP should be allowed
@@ -132,7 +155,7 @@ func (at *AbuseTracker) CheckConnectionRate(ip string) bool {
 		// Auto-block after too many violations
 		blocked := false
 		if at.violationCounts[ip] >= config.RateLimitViolationsMax {
-			at.blockedIPs[ip] = now.Add(config.BlockDuration)
+			at.extendBlock(ip, now.Add(config.BlockDuration))
 			delete(at.violationCounts, ip)
 			blocked = true
 		}
