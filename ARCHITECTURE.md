@@ -49,12 +49,14 @@ Tunnl.gg is a minimal SSH tunneling service that exposes local applications to t
 
 ```text
 tunnl.gg/
-├── cmd/tunnl/main.go           # Entry point, server initialization
+├── cmd/tunnl/main.go           # Entry point
 └── pkg/
     ├── clientip/
     │   └── clientip.go         # Visitor IP resolution behind trusted proxies (Cloudflare, X-Forwarded-For)
     ├── config/
     │   └── config.go           # Constants and runtime configuration
+    ├── serve/
+    │   └── serve.go            # Server initialization from the environment, reusable by other binaries
     ├── server/
     │   ├── server.go           # Server struct, tunnel registry, rate limits
     │   ├── accounts.go         # Optional accounts (AccountStore) for hosted deployments

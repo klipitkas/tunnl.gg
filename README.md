@@ -61,6 +61,8 @@ tunnl.gg/
 │   │   └── clientip.go
 │   ├── config/             # Configuration and constants
 │   │   └── config.go
+│   ├── serve/              # Server startup, shared with hosted builds
+│   │   └── serve.go
 │   ├── server/             # Server implementation
 │   │   ├── server.go       # Server struct, tunnel registry
 │   │   ├── accounts.go     # Optional accounts for hosted deployments
