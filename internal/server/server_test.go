@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"tunnl.gg/internal/config"
+	"github.com/klipitkas/tunnl.gg/internal/config"
 )
 
 func TestCheckAndReserveConnection_CapacityCountsReservations(t *testing.T) {

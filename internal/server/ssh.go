@@ -9,8 +9,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"tunnl.gg/internal/config"
-	"tunnl.gg/internal/tunnel"
+	"github.com/klipitkas/tunnl.gg/internal/config"
+	"github.com/klipitkas/tunnl.gg/internal/tunnel"
 )
 
 type tcpipForwardRequest struct {

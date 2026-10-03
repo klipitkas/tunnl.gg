@@ -1,4 +1,4 @@
-module tunnl.gg
+module github.com/klipitkas/tunnl.gg
 
 go 1.26.0
 
