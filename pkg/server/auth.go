@@ -15,6 +15,7 @@ import (
 const (
 	permOwner           = "owner" // who may take over the stable subdomain: a key fingerprint or an account
 	permStableSubdomain = "stable-subdomain"
+	permKeyFingerprint  = "key-fingerprint" // the key the client authenticated with
 )
 
 var errStableNeedsKey = errors.New("the stable user requires an SSH key")
@@ -53,6 +54,7 @@ func (s *Server) authPublicKey(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.P
 	return &ssh.Permissions{Extensions: map[string]string{
 		permOwner:           ssh.FingerprintSHA256(key),
 		permStableSubdomain: sub,
+		permKeyFingerprint:  ssh.FingerprintSHA256(key),
 	}}, nil
 }
 

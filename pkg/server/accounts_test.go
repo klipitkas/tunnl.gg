@@ -201,3 +201,39 @@ func TestE2E_AccountKeyRequired(t *testing.T) {
 		client.Close()
 	}
 }
+
+func TestE2E_CloseKeyLeavesOtherKeysOpen(t *testing.T) {
+	srv, addr := startSSHServer(t)
+	alice, bob := newTestKey(t), newTestKey(t)
+	team := &Account{ID: "acct_team", Limits: proLimits}
+	withAccounts(srv, []ssh.Signer{alice, bob}, []*Account{team, team})
+
+	// Without a reserved subdomain, each key opens its own stable one
+	a := openTunnel(t, srv, addr, accountClient(alice), echoBackend("alice"))
+	b := openTunnel(t, srv, addr, accountClient(bob), echoBackend("bob"))
+	if a.sub == b.sub {
+		t.Fatalf("both keys got %q", a.sub)
+	}
+
+	if n := srv.CloseKey(ssh.FingerprintSHA256(alice.PublicKey())); n != 1 {
+		t.Errorf("CloseKey() closed %d connections, want 1", n)
+	}
+	waitFor(t, "alice's tunnel to close", func() bool { return srv.GetTunnel(a.sub) == nil })
+	if srv.GetTunnel(b.sub) == nil {
+		t.Error("closing alice's key closed bob's tunnel too")
+	}
+	if n := srv.CloseKey(ssh.FingerprintSHA256(alice.PublicKey())); n != 0 {
+		t.Errorf("closing a key with no connections closed %d", n)
+	}
+
+	// Stable users' keys are tracked too
+	stableKey := newTestKey(t)
+	s := openTunnel(t, srv, addr, stableClient(stableKey), echoBackend("stable"))
+	if n := srv.CloseKey(ssh.FingerprintSHA256(stableKey.PublicKey())); n != 1 {
+		t.Errorf("CloseKey() for a stable user closed %d, want 1", n)
+	}
+	waitFor(t, "the stable tunnel to close", func() bool { return srv.GetTunnel(s.sub) == nil })
+	if srv.GetTunnel(b.sub) == nil {
+		t.Error("bob's tunnel should still be open")
+	}
+}

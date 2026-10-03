@@ -75,6 +75,7 @@ func (s *Server) authAccount(key ssh.PublicKey) (*ssh.Permissions, error) {
 		Extensions: map[string]string{
 			permOwner:           owner,
 			permStableSubdomain: sub,
+			permKeyFingerprint:  ssh.FingerprintSHA256(key),
 		},
 		ExtraData: map[any]any{accountKey{}: acct},
 	}, nil
@@ -95,4 +96,13 @@ func connAccount(conn *ssh.ServerConn) *Account {
 // can reconnect.
 func (s *Server) CloseAccount(id string) int {
 	return closeConns(s.takeConns(s.accountConns, id))
+}
+
+// CloseKey closes the SSH connections that authenticated with the key with
+// the given fingerprint (as ssh.FingerprintSHA256 formats it), for example
+// after it's removed from its account, and returns how many it closed. Other
+// connections of the same account stay open. The AccountStore should stop
+// accepting the key first, or its client can reconnect.
+func (s *Server) CloseKey(fingerprint string) int {
+	return closeConns(s.takeConns(s.keyConns, fingerprint))
 }

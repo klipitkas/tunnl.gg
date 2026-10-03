@@ -41,6 +41,7 @@ type Server struct {
 	newSubdomain    func() (string, error)
 	sshConns        map[string][]*ssh.ServerConn // SSH connections per IP for forced closure
 	accountConns    map[string][]*ssh.ServerConn // SSH connections per account ID for forced closure
+	keyConns        map[string][]*ssh.ServerConn // SSH connections per client key fingerprint for forced closure
 	accounts        AccountStore                 // nil unless the deployment has accounts
 	mu              sync.RWMutex
 	sshConfig       *ssh.ServerConfig
@@ -72,6 +73,7 @@ func New(hostKeyPath string, domain string) (*Server, error) {
 		slots:         make(map[string]int),
 		sshConns:      make(map[string][]*ssh.ServerConn),
 		accountConns:  make(map[string][]*ssh.ServerConn),
+		keyConns:      make(map[string][]*ssh.ServerConn),
 		abuseTracker:  NewAbuseTracker(),
 		wsPerTunnel:   newConnLimiter(config.MaxWebSocketsPerTunnel),
 		wsPerVisitor:  newConnLimiter(config.MaxWebSocketsPerVisitor),

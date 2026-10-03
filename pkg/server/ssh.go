@@ -73,6 +73,11 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		s.addConn(s.accountConns, acct.ID, sshConn)
 		defer s.removeConn(s.accountConns, acct.ID, sshConn)
 	}
+	if perms := sshConn.Permissions; perms != nil && perms.Extensions[permKeyFingerprint] != "" {
+		fp := perms.Extensions[permKeyFingerprint]
+		s.addConn(s.keyConns, fp, sshConn)
+		defer s.removeConn(s.keyConns, fp, sshConn)
+	}
 
 	s.IncrementConnections()
 
