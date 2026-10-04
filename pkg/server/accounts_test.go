@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/klipitkas/tunnl.gg/pkg/config"
+	"github.com/klipitkas/tunnl.gg/pkg/tunnel"
 )
 
 // fakeAccounts finds accounts by key fingerprint.
@@ -65,7 +66,7 @@ func TestAuthPublicKey_Accounts(t *testing.T) {
 	user := fakeConnMetadata{user: config.AccountSSHUser}
 	derivedKey, reservedKey, unknownKey := newTestKey(t), newTestKey(t), newTestKey(t)
 	derived := &Account{ID: "acct_derived", Limits: proLimits}
-	reserved := &Account{ID: "acct_reserved", Limits: proLimits, Subdomain: "myapp"}
+	reserved := &Account{ID: "acct_reserved", Limits: proLimits, Subdomain: "myapp", Subdomains: map[string]tunnel.Options{"myapp": {}}}
 	store := withAccounts(s, []ssh.Signer{derivedKey, reservedKey}, []*Account{derived, reserved})
 
 	perms, err := s.authPublicKey(user, derivedKey.PublicKey())
@@ -98,7 +99,7 @@ func TestAuthPublicKey_Accounts(t *testing.T) {
 		t.Errorf("unknown key: got %v, want %v", err, errUnknownKey)
 	}
 
-	for _, invalid := range []*Account{{ID: ""}, {ID: "acct_bad", Subdomain: "Not.A.Label"}} {
+	for _, invalid := range []*Account{{ID: ""}, {ID: "acct_bad", Subdomain: "Not.A.Label"}, {ID: "acct_bad2", Subdomains: map[string]tunnel.Options{"Not.A.Label": {}}}} {
 		store.byKey[ssh.FingerprintSHA256(unknownKey.PublicKey())] = invalid
 		if _, err := s.authPublicKey(user, unknownKey.PublicKey()); !errors.Is(err, errAccountLookup) {
 			t.Errorf("invalid account %+v: got %v, want %v", invalid, err, errAccountLookup)
@@ -144,7 +145,7 @@ func TestCheckAndReserveConnection_AccountsLimitedPerAccount(t *testing.T) {
 func TestE2E_AccountWithReservedSubdomain(t *testing.T) {
 	srv, addr := startSSHServer(t)
 	alice, bob := newTestKey(t), newTestKey(t)
-	team := &Account{ID: "acct_team", Limits: proLimits, Subdomain: "myapp"}
+	team := &Account{ID: "acct_team", Limits: proLimits, Subdomain: "myapp", Subdomains: map[string]tunnel.Options{"myapp": {}}}
 	withAccounts(srv, []ssh.Signer{alice, bob}, []*Account{team, team})
 
 	first := openTunnel(t, srv, addr, accountClient(alice), echoBackend("alice"))

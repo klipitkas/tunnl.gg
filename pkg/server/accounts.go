@@ -2,7 +2,9 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"log"
+	"strings"
 
 	"golang.org/x/crypto/ssh"
 
@@ -20,9 +22,11 @@ type Account struct {
 	// "" to give each key its stable subdomain. Don't reserve names in the
 	// generated format (subdomain.IsValid): anonymous clients may hold them.
 	Subdomain string
-	// Options are saved settings for the account's tunnels, such as a
-	// password; options in the ssh command override them one by one.
-	Options tunnel.Options
+	// Subdomains are the account's reserved subdomains, each with its saved
+	// options, such as a password; options in the ssh command override them
+	// one by one. A client opens one by naming it as the bind address,
+	// like ssh -R myapp:80:localhost:3000; without a name it gets Subdomain.
+	Subdomains map[string]tunnel.Options
 }
 
 // AccountStore finds the account an SSH key belongs to.
@@ -63,7 +67,11 @@ func (s *Server) authAccount(key ssh.PublicKey) (*ssh.Permissions, error) {
 	if acct == nil {
 		return nil, errUnknownKey
 	}
-	if acct.ID == "" || (acct.Subdomain != "" && !subdomain.IsLabel(acct.Subdomain)) {
+	valid := acct.ID != "" && (acct.Subdomain == "" || subdomain.IsLabel(acct.Subdomain))
+	for name := range acct.Subdomains {
+		valid = valid && subdomain.IsLabel(name)
+	}
+	if !valid {
 		log.Printf("Account lookup returned an invalid account: ID %q, subdomain %q", acct.ID, acct.Subdomain)
 		return nil, errAccountLookup
 	}
@@ -121,4 +129,61 @@ func (s *Server) SetTunnelOptions(accountID, sub string, o tunnel.Options) bool 
 	}
 	tun.SetBaseOptions(o)
 	return true
+}
+
+// reserved reports whether sub is one of the account's subdomains, with its
+// saved options. A nil account has none.
+func (a *Account) reserved(sub string) (tunnel.Options, bool) {
+	if a == nil {
+		return tunnel.Options{}, false
+	}
+	opts, ok := a.Subdomains[sub]
+	return opts, ok
+}
+
+// defaultBindAddrs are the bind addresses that ask for no particular name:
+// what clients send for ssh -R 80:..., -R 0.0.0.0:80:... and the like.
+var defaultBindAddrs = map[string]bool{"": true, "localhost": true, "0.0.0.0": true, "127.0.0.1": true, "::": true, "::1": true, "*": true}
+
+// requestedName is the subdomain a forward's bind address names, without
+// the domain if it was given in full; "" when it names none.
+func (s *Server) requestedName(bindAddr string) string {
+	name := strings.ToLower(strings.TrimSpace(bindAddr))
+	if defaultBindAddrs[name] {
+		return ""
+	}
+	return strings.TrimSuffix(name, "."+strings.ToLower(s.domain))
+}
+
+// claimForward picks and claims the subdomain for a connection's forward:
+// one of the account's subdomains if the bind address names it, or else the
+// connection's default, its key's stable subdomain or a random one. It
+// returns the subdomain's saved options, and a note for the banner when a
+// requested name isn't used.
+func (s *Server) claimForward(conn *ssh.ServerConn, acct *Account, bindAddr string) (sub string, stable bool, opts tunnel.Options, note string, err error) {
+	if name := s.requestedName(bindAddr); name != "" {
+		if acct == nil {
+			note = " (" + name + " ignored: choosing a subdomain needs an account)"
+		} else {
+			opts, ok := acct.reserved(name)
+			if !ok {
+				return "", false, tunnel.Options{}, "", fmt.Errorf("%s isn't one of your account's subdomains: reserve it in the dashboard first, or leave it out for your key's default", name)
+			}
+			if !s.claimStableSubdomain(name, conn, "account:"+acct.ID) {
+				return "", false, tunnel.Options{}, "", fmt.Errorf("%s is in use and couldn't be taken over: try again in a moment", name)
+			}
+			return name, true, opts, "", nil
+		}
+	}
+	if perms := conn.Permissions; perms != nil && perms.Extensions[permStableSubdomain] != "" {
+		sub = perms.Extensions[permStableSubdomain]
+		stable = s.claimStableSubdomain(sub, conn, perms.Extensions[permOwner])
+	}
+	if !stable {
+		if sub, err = s.ReserveSubdomain(conn); err != nil {
+			return "", false, tunnel.Options{}, "", fmt.Errorf("no subdomain is free right now: try again in a moment")
+		}
+	}
+	opts, _ = acct.reserved(sub)
+	return sub, stable, opts, note, nil
 }

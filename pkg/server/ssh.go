@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -83,27 +84,26 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	s.IncrementConnections()
 
-	// Clients that connected as the stable user with a key get the key's
-	// subdomain, and accounts their reserved one or the key's; everyone else,
-	// or a client whose subdomain is held by someone else, gets a random one
-	sub, stable := "", false
-	if perms := sshConn.Permissions; perms != nil && perms.Extensions[permStableSubdomain] != "" {
-		sub = perms.Extensions[permStableSubdomain]
-		stable = s.claimStableSubdomain(sub, sshConn, perms.Extensions[permOwner])
-	}
-	if !stable {
-		var err error
-		if sub, err = s.ReserveSubdomain(sshConn); err != nil {
-			log.Printf("Failed to generate subdomain: %v", err)
-			return
+	// The subdomain is picked when the client asks for its forward, whose
+	// bind address can name one of an account's subdomains. claimMu keeps a
+	// late forward from claiming one after the connection gave up waiting.
+	var (
+		claimMu    sync.Mutex
+		done       bool
+		sub        string
+		stable     bool
+		nameNote   string // why a requested name wasn't used
+		forwardErr error  // why the forward was refused
+	)
+	defer func() {
+		claimMu.Lock()
+		done = true
+		claimed := sub
+		claimMu.Unlock()
+		if claimed != "" {
+			s.RemoveTunnel(claimed, sshConn)
 		}
-	}
-	defer s.RemoveTunnel(sub, sshConn)
-	if acct != nil {
-		log.Printf("New SSH connection from %s, assigned subdomain: %s (stable: %v, account: %s)", sshConn.RemoteAddr(), sub, stable, acct.ID)
-	} else {
-		log.Printf("New SSH connection from %s, assigned subdomain: %s (stable: %v)", sshConn.RemoteAddr(), sub, stable)
-	}
+	}()
 
 	var bindAddr string
 	var bindPort uint32
@@ -133,6 +133,28 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 						req.Reply(false, nil)
 						continue
 					}
+					claimMu.Lock()
+					if done {
+						claimMu.Unlock()
+						req.Reply(false, nil)
+						return
+					}
+					var opts tunnel.Options
+					var err error
+					sub, stable, opts, nameNote, err = s.claimForward(sshConn, acct, fwdReq.BindAddr)
+					claimMu.Unlock()
+					registered = true
+					if err != nil {
+						forwardErr = err
+						close(tunnelRegistered)
+						req.Reply(false, nil)
+						continue
+					}
+					if acct != nil {
+						log.Printf("New SSH connection from %s, assigned subdomain: %s (stable: %v, account: %s)", sshConn.RemoteAddr(), sub, stable, acct.ID)
+					} else {
+						log.Printf("New SSH connection from %s, assigned subdomain: %s (stable: %v)", sshConn.RemoteAddr(), sub, stable)
+					}
 					bindAddr = fwdReq.BindAddr
 					bindPort = fwdReq.BindPort
 					t := s.RegisterTunnel(sub, sshConn, bindAddr, bindPort, clientIP, limits, accountID)
@@ -141,11 +163,8 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 						req.Reply(false, nil)
 						return
 					}
-					if acct != nil {
-						t.SetBaseOptions(acct.Options)
-					}
+					t.SetBaseOptions(opts)
 					tun = t
-					registered = true
 					close(tunnelRegistered)
 					req.Reply(true, nil)
 				case "cancel-tcpip-forward":
@@ -163,6 +182,11 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	case <-tunnelRegistered:
 	case <-time.After(30 * time.Second):
 		log.Printf("Timeout waiting for tcpip-forward request from %s", sshConn.RemoteAddr())
+		return
+	}
+	if forwardErr != nil {
+		log.Printf("Forward refused for %s: %v", sshConn.RemoteAddr(), forwardErr)
+		s.sendErrorAndClose(sshConn, chans, forwardErr.Error())
 		return
 	}
 
@@ -269,9 +293,9 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	shown := opts
 	if acct != nil {
-		shown = acct.Options.With(opts)
+		shown = acct.Subdomains[sub].With(opts)
 	}
-	fmt.Fprint(channel, sessionBanner(url, s.domain, urlNote(stable, acct), limits, shown))
+	fmt.Fprint(channel, sessionBanner(url, s.domain, urlNote(stable, acct, sub)+nameNote, limits, shown))
 
 	logger := tunnel.NewRequestLogger(channel, config.LogBufferSize)
 	tun.SetLogger(logger)
@@ -431,9 +455,10 @@ func readOptions(reqs <-chan *ssh.Request, limits config.Limits) (tunnel.Options
 }
 
 // urlNote explains in the session banner whether the URL stays the same.
-func urlNote(stable bool, acct *Account) string {
+func urlNote(stable bool, acct *Account, sub string) string {
+	_, reserved := acct.reserved(sub)
 	switch {
-	case stable && acct != nil && acct.Subdomain != "":
+	case stable && reserved:
 		return "reserved for your account"
 	case stable:
 		return "stays the same for your SSH key"

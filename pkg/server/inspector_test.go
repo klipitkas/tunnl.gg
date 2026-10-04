@@ -19,7 +19,7 @@ import (
 func TestE2E_Inspector(t *testing.T) {
 	srv, addr := startSSHServer(t)
 	key := newTestKey(t)
-	acct := &Account{ID: "acct_pro", Subdomain: "myapp", Limits: config.Limits{Options: config.AllOptions, Inspect: true}}
+	acct := &Account{ID: "acct_pro", Subdomain: "myapp", Subdomains: map[string]tunnel.Options{"myapp": {}}, Limits: config.Limits{Options: config.AllOptions, Inspect: true}}
 	withAccounts(srv, []ssh.Signer{key}, []*Account{acct})
 	var hits atomic.Int32
 	tt := openTunnelCommand(t, srv, addr, accountClient(key), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +79,9 @@ func TestE2E_Inspector(t *testing.T) {
 	if !again.Replay || again.Status != http.StatusCreated || string(again.ResponseBody.Data) != `got {"event":"paid"}` || hits.Load() != 2 {
 		t.Errorf("replay: %+v, app hit %d times", again, hits.Load())
 	}
+	waitFor(t, "the replay in the request log", func() bool {
+		return strings.Contains(tt.output.String(), "replayed") && strings.Contains(tt.output.String(), "dashboard")
+	})
 	if _, err := srv.GetTunnel("myapp").Replay(context.Background(), refused.ID); !errors.Is(err, tunnel.ErrNotForwarded) || hits.Load() != 2 {
 		t.Errorf("replaying a request tunnl refused: %v, app hit %d times", err, hits.Load())
 	}

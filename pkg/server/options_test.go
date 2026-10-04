@@ -175,7 +175,7 @@ func TestE2E_AccountSavedOptions(t *testing.T) {
 	srv, addr := startSSHServer(t)
 	key := newTestKey(t)
 	acct := &Account{ID: "acct_pro", Limits: config.Limits{Options: config.AllOptions}, Subdomain: "myapp",
-		Options: tunnel.Options{Host: "saved.test", Auth: tunnel.NewBasicAuth("me", func(p string) bool { return p == "saved" })}}
+		Subdomains: map[string]tunnel.Options{"myapp": {Host: "saved.test", Auth: tunnel.NewBasicAuth("me", func(p string) bool { return p == "saved" })}}}
 	withAccounts(srv, []ssh.Signer{key}, []*Account{acct})
 
 	tt := openTunnelCommand(t, srv, addr, accountClient(key), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

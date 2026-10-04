@@ -216,6 +216,7 @@ func (t *Tunnel) Replay(ctx context.Context, id uint64) (Exchange, error) {
 	if err != nil {
 		e.Duration = time.Since(e.Time)
 		e.Note = "the app didn't answer: " + err.Error()
+		t.logReplay(e, -1)
 		return insp.Add(e), nil
 	}
 	defer resp.Body.Close()
@@ -225,5 +226,24 @@ func (t *Tunnel) Replay(ctx context.Context, id uint64) (Exchange, error) {
 	e.ResponseHeader = resp.Header.Clone()
 	e.ResponseBody = body.Body()
 	e.Duration = time.Since(e.Time)
+	t.logReplay(e, e.ResponseBody.Size)
 	return insp.Add(e), nil
+}
+
+// logReplay shows a replayed request in the client's request log, like a
+// visitor's, so it's clear the app got it again.
+func (t *Tunnel) logReplay(e Exchange, size int64) {
+	if logger := t.Logger(); logger != nil {
+		logger.Log(Entry{
+			Time:    e.Time,
+			Method:  e.Method,
+			Target:  e.Target,
+			Status:  e.Status,
+			Bytes:   size,
+			Latency: e.Duration,
+			Visitor: "dashboard",
+			Note:    "replayed",
+			Detail:  e.Note,
+		})
+	}
 }

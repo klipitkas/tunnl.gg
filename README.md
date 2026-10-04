@@ -321,6 +321,21 @@ error. The options are visible to the server, and `auth=` is saved in your shell
 history like any command. A server can restrict which options anonymous clients may
 use (`Server.SetFreeLimits`); by default they may use all of them.
 
+### Choose a Subdomain (accounts)
+
+On a deployment with accounts (`Server.SetAccounts`), an account's key connects as
+`pro@` and gets the account's default subdomain for that key. To open another of the
+account's subdomains, name it as the bind address; each connection is one tunnel, so
+several commands run several subdomains at once:
+
+```bash
+ssh -t -R myapp:80:localhost:3000 pro@proxy.tunnl.gg
+ssh -t -R api:80:localhost:8000 pro@proxy.tunnl.gg
+```
+
+A name the account doesn't have ends the session with an error. Anonymous clients keep
+their random or stable URL; a name they give is ignored, and the banner says so.
+
 ### Expose a Different Host
 
 ```bash

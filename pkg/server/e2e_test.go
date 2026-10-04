@@ -115,6 +115,13 @@ func openTunnel(t *testing.T, srv *Server, addr string, clientConfig *ssh.Client
 // "ssh -t -R ... proxy.tunnl.gg host=localhost", or a shell if it's empty.
 func openTunnelCommand(t *testing.T, srv *Server, addr string, clientConfig *ssh.ClientConfig, backend http.Handler, command string) *testTunnel {
 	t.Helper()
+	return openTunnelAt(t, srv, addr, clientConfig, backend, "0.0.0.0:80", command)
+}
+
+// openTunnelAt is openTunnelCommand forwarding listenAddr, like
+// ssh -R myapp:80:... for "myapp:80".
+func openTunnelAt(t *testing.T, srv *Server, addr string, clientConfig *ssh.ClientConfig, backend http.Handler, listenAddr, command string) *testTunnel {
+	t.Helper()
 	client, err := ssh.Dial("tcp", addr, clientConfig)
 	if err != nil {
 		t.Fatalf("ssh.Dial() error: %v", err)
@@ -125,7 +132,7 @@ func openTunnelCommand(t *testing.T, srv *Server, addr string, clientConfig *ssh
 	// relay each forwarded channel to a real local TCP server.
 	local := httptest.NewServer(backend)
 	t.Cleanup(local.Close)
-	forwarded, err := client.Listen("tcp", "0.0.0.0:80")
+	forwarded, err := client.Listen("tcp", listenAddr)
 	if err != nil {
 		t.Fatalf("client.Listen() error: %v", err)
 	}
