@@ -300,6 +300,7 @@ func logTunnlEvent(tun *tunnel.Tunnel, r *http.Request, client clientip.Result, 
 			RequestHeader: header,
 			Status:        status,
 			Note:          "answered by tunnl: " + note,
+			FromTunnl:     true,
 		})
 	}
 	logEntry(tun, tunnel.Entry{

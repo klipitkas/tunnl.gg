@@ -32,6 +32,7 @@ type Exchange struct {
 	ResponseBody   Body
 	Duration       time.Duration
 	Note           string // why tunnl answered itself, or why the request failed
+	FromTunnl      bool   // tunnl answered it, so it never reached the app
 	Replay         bool   // sent again from the inspector
 }
 
@@ -165,6 +166,7 @@ var (
 	ErrGone           = errors.New("that request is no longer kept: only the latest 50 are")
 	ErrBodyTruncated  = errors.New("that request's body was too large to keep in full, so it can't be sent again")
 	ErrCantReplayUpgr = errors.New("WebSocket requests can't be sent again")
+	ErrNotForwarded   = errors.New("tunnl answered that request itself, so it never reached your app and can't be sent again")
 )
 
 // Replay sends the exchange with id to the app again, as it was sent the
@@ -182,6 +184,8 @@ func (t *Tunnel) Replay(ctx context.Context, id uint64) (Exchange, error) {
 		return Exchange{}, ErrBodyTruncated
 	case orig.Method == "WS":
 		return Exchange{}, ErrCantReplayUpgr
+	case orig.FromTunnl:
+		return Exchange{}, ErrNotForwarded
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, replayTimeout)

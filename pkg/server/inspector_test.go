@@ -59,7 +59,7 @@ func TestE2E_Inspector(t *testing.T) {
 		t.Fatalf("kept %d exchanges: %+v", len(list), list)
 	}
 	refused, e := list[0], list[1]
-	if refused.Status != http.StatusUnauthorized || !strings.HasPrefix(refused.Note, "answered by tunnl") || refused.RequestHeader.Get("Authorization") != "" {
+	if refused.Status != http.StatusUnauthorized || !refused.FromTunnl || !strings.HasPrefix(refused.Note, "answered by tunnl") || refused.RequestHeader.Get("Authorization") != "" {
 		t.Errorf("the refused request: %+v", refused)
 	}
 	if e.Method != "POST" || e.Target != "/hook?x=1" || e.Status != http.StatusCreated || string(e.RequestBody.Data) != `{"event":"paid"}` ||
@@ -78,6 +78,9 @@ func TestE2E_Inspector(t *testing.T) {
 	}
 	if !again.Replay || again.Status != http.StatusCreated || string(again.ResponseBody.Data) != `got {"event":"paid"}` || hits.Load() != 2 {
 		t.Errorf("replay: %+v, app hit %d times", again, hits.Load())
+	}
+	if _, err := srv.GetTunnel("myapp").Replay(context.Background(), refused.ID); !errors.Is(err, tunnel.ErrNotForwarded) || hits.Load() != 2 {
+		t.Errorf("replaying a request tunnl refused: %v, app hit %d times", err, hits.Load())
 	}
 	if _, err := srv.GetTunnel("myapp").Replay(context.Background(), 999); !errors.Is(err, tunnel.ErrGone) {
 		t.Errorf("replaying an unknown request: %v", err)
