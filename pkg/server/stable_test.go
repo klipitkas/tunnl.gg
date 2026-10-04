@@ -222,3 +222,13 @@ func TestE2E_StableUserWithoutKeyIsRefused(t *testing.T) {
 		t.Fatalf("%q without a key should be refused", config.StableSSHUser)
 	}
 }
+
+func TestStableSubdomainExported(t *testing.T) {
+	s := newTestServer(t)
+	key := newTestKey(t).PublicKey()
+	a, err := s.StableSubdomain(key)
+	b, _ := s.stableSubdomain(key)
+	if err != nil || a == "" || a != b {
+		t.Errorf("StableSubdomain() = %q, %v; want %q", a, err, b)
+	}
+}

@@ -61,6 +61,13 @@ func (s *Server) authPublicKey(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.P
 // stableSubdomain derives a client key's subdomain. The key is public, so it
 // is keyed with a secret held only by this server: the subdomain is the same
 // for every connection with that key, but can't be computed from the key alone.
+// StableSubdomain returns the subdomain key gets when it connects as the
+// stable user, or as an account's key with no subdomain of its own, so a
+// dashboard can show it.
+func (s *Server) StableSubdomain(key ssh.PublicKey) (string, error) {
+	return s.stableSubdomain(key)
+}
+
 func (s *Server) stableSubdomain(key ssh.PublicKey) (string, error) {
 	mac := hmac.New(sha256.New, s.subdomainSecret)
 	mac.Write(key.Marshal())
