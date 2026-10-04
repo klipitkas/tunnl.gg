@@ -141,6 +141,9 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 						req.Reply(false, nil)
 						return
 					}
+					if acct != nil {
+						t.SetBaseOptions(acct.Options)
+					}
 					tun = t
 					registered = true
 					close(tunnelRegistered)
@@ -264,7 +267,11 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	}
 	tun.SetOptions(opts)
 
-	fmt.Fprint(channel, sessionBanner(url, s.domain, urlNote(stable, acct), limits, opts))
+	shown := opts
+	if acct != nil {
+		shown = acct.Options.With(opts)
+	}
+	fmt.Fprint(channel, sessionBanner(url, s.domain, urlNote(stable, acct), limits, shown))
 
 	logger := tunnel.NewRequestLogger(channel, config.LogBufferSize)
 	tun.SetLogger(logger)

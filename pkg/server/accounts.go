@@ -8,6 +8,7 @@ import (
 
 	"github.com/klipitkas/tunnl.gg/pkg/config"
 	"github.com/klipitkas/tunnl.gg/pkg/subdomain"
+	"github.com/klipitkas/tunnl.gg/pkg/tunnel"
 )
 
 // Account is a customer of a hosted deployment, such as a paid plan. Its
@@ -19,6 +20,9 @@ type Account struct {
 	// "" to give each key its stable subdomain. Don't reserve names in the
 	// generated format (subdomain.IsValid): anonymous clients may hold them.
 	Subdomain string
+	// Options are saved settings for the account's tunnels, such as a
+	// password; options in the ssh command override them one by one.
+	Options tunnel.Options
 }
 
 // AccountStore finds the account an SSH key belongs to.
@@ -105,4 +109,16 @@ func (s *Server) CloseAccount(id string) int {
 // accepting the key first, or its client can reconnect.
 func (s *Server) CloseKey(fingerprint string) int {
 	return closeConns(s.takeConns(s.keyConns, fingerprint))
+}
+
+// SetTunnelOptions replaces the saved options of the account's open tunnel
+// on sub, if there is one, for example after its settings change. It
+// reports whether there was.
+func (s *Server) SetTunnelOptions(accountID, sub string, o tunnel.Options) bool {
+	tun := s.GetTunnel(sub)
+	if tun == nil || accountID == "" || tun.AccountID != accountID {
+		return false
+	}
+	tun.SetBaseOptions(o)
+	return true
 }

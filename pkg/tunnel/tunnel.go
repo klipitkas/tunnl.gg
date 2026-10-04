@@ -29,7 +29,8 @@ type Tunnel struct {
 	transport      *http.Transport   // Reusable HTTP transport for proxying
 	pendingOpens   chan struct{}     // slots for channel opens awaiting the client's answer
 	logger         *RequestLogger    // Async request logger for SSH terminal output
-	opts           Options           // what the client asked for in the ssh command
+	baseOpts       Options           // saved settings, e.g. for an account's subdomain
+	opts           Options           // what the client asked for in the ssh command; overrides baseOpts
 	optsSet        bool              // opts are final; until then, requests wait
 	optsReady      chan struct{}     // closed once opts are final or the tunnel closes; nil if never awaited
 	releaseOnce    sync.Once
@@ -155,7 +156,17 @@ func (t *Tunnel) AwaitOptions() {
 	t.mu.Unlock()
 }
 
-// SetOptions sets the client's options and lets waiting requests through.
+// SetBaseOptions sets saved options, like an account's settings for the
+// subdomain. Options from the ssh command override them one by one. It
+// applies to requests from then on.
+func (t *Tunnel) SetBaseOptions(o Options) {
+	t.mu.Lock()
+	t.baseOpts = o
+	t.mu.Unlock()
+}
+
+// SetOptions sets the options from the client's ssh command and lets
+// waiting requests through.
 func (t *Tunnel) SetOptions(o Options) {
 	t.mu.Lock()
 	t.opts, t.optsSet = o, true
@@ -191,7 +202,7 @@ func (t *Tunnel) Options(ctx context.Context) (Options, bool) {
 	if t.closed || (ready != nil && !t.optsSet) {
 		return Options{}, false
 	}
-	return t.opts, true
+	return t.baseOpts.With(t.opts), true
 }
 
 // Close cleans up the tunnel's transport and logger. Open channels close with

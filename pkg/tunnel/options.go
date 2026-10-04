@@ -25,8 +25,16 @@ type Options struct {
 // BasicAuth is a user name and password visitors must send with HTTP basic
 // authentication. Only a hash of them is kept.
 type BasicAuth struct {
-	User string
-	hash [sha256.Size]byte
+	User   string
+	hash   [sha256.Size]byte
+	verify func(password string) bool // checks the password instead of hash, if set
+}
+
+// NewBasicAuth returns credentials whose password verify checks, for
+// passwords stored hashed elsewhere. verify runs for every request that
+// sends user, so it should cache what it can.
+func NewBasicAuth(user string, verify func(password string) bool) *BasicAuth {
+	return &BasicAuth{User: user, verify: verify}
 }
 
 // Limits on option values, so a client can't make the server hold much.
@@ -120,6 +128,20 @@ func parseAllowEntry(entry string) (netip.Prefix, error) {
 	return netip.PrefixFrom(addr, addr.BitLen()), nil
 }
 
+// With returns o with the options set in override replacing its own.
+func (o Options) With(override Options) Options {
+	if override.Host != "" {
+		o.Host = override.Host
+	}
+	if override.Auth != nil {
+		o.Auth = override.Auth
+	}
+	if len(override.Allow) > 0 {
+		o.Allow = override.Allow
+	}
+	return o
+}
+
 // Names returns the names of the options that are set.
 func (o Options) Names() []string {
 	var names []string
@@ -154,6 +176,9 @@ func (a *BasicAuth) Check(r *http.Request) bool {
 	user, pass, ok := r.BasicAuth()
 	if !ok {
 		return false
+	}
+	if a.verify != nil {
+		return subtle.ConstantTimeCompare([]byte(user), []byte(a.User)) == 1 && a.verify(pass)
 	}
 	sum := sha256.Sum256([]byte(user + ":" + pass))
 	return subtle.ConstantTimeCompare(sum[:], a.hash[:]) == 1

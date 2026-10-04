@@ -139,3 +139,30 @@ func TestRequestsWaitForOptions(t *testing.T) {
 		t.Error("a request went through after its wait timed out")
 	}
 }
+
+func TestOptionsWith(t *testing.T) {
+	base, _ := ParseOptions("host=base.test auth=me:base allow=192.0.2.1")
+	cmd, _ := ParseOptions("host=cmd.test")
+	got := base.With(cmd)
+	if got.Host != "cmd.test" || got.Auth != base.Auth || len(got.Allow) != 1 {
+		t.Errorf("With() = %+v", got)
+	}
+	if got := (Options{}).With(Options{}); len(got.Names()) != 0 {
+		t.Errorf("empty With() = %+v", got)
+	}
+}
+
+func TestNewBasicAuth(t *testing.T) {
+	a := NewBasicAuth("me", func(p string) bool { return p == "right" })
+	r, _ := http.NewRequest(http.MethodGet, "/", nil)
+	for user, pass := range map[string]string{"me": "wrong", "you": "right"} {
+		r.SetBasicAuth(user, pass)
+		if a.Check(r) {
+			t.Errorf("%s:%s accepted", user, pass)
+		}
+	}
+	r.SetBasicAuth("me", "right")
+	if !a.Check(r) {
+		t.Error("the right password was refused")
+	}
+}

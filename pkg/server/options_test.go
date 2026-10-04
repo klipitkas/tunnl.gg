@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/klipitkas/tunnl.gg/pkg/config"
+	"github.com/klipitkas/tunnl.gg/pkg/tunnel"
 )
 
 func TestE2E_PasswordAllowlistAndHost(t *testing.T) {
@@ -167,5 +168,46 @@ func TestE2E_PasswordGuessingLimited(t *testing.T) {
 	// Other visitors aren't affected
 	if rec := tt.serveDirect("203.0.113.1:1234", map[string]string{"Authorization": "Basic " + base64.StdEncoding.EncodeToString([]byte("me:right"))}); rec.Code != http.StatusOK {
 		t.Errorf("another visitor with the password: %d", rec.Code)
+	}
+}
+
+func TestE2E_AccountSavedOptions(t *testing.T) {
+	srv, addr := startSSHServer(t)
+	key := newTestKey(t)
+	acct := &Account{ID: "acct_pro", Limits: config.Limits{Options: config.AllOptions}, Subdomain: "myapp",
+		Options: tunnel.Options{Host: "saved.test", Auth: tunnel.NewBasicAuth("me", func(p string) bool { return p == "saved" })}}
+	withAccounts(srv, []ssh.Signer{key}, []*Account{acct})
+
+	tt := openTunnelCommand(t, srv, addr, accountClient(key), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, r.Host)
+	}), "host=cmd.test")
+	if !strings.Contains(tt.output.String(), "visitors sign in as "+bannerReset+"me") {
+		t.Errorf("the banner should show the saved password: %q", tt.output.String())
+	}
+	try := func(pass string) (int, string) {
+		headers := map[string]string{}
+		if pass != "" {
+			headers["Authorization"] = "Basic " + base64.StdEncoding.EncodeToString([]byte("me:"+pass))
+		}
+		rec := tt.serveDirect("198.51.100.7:1234", headers)
+		return rec.Code, rec.Body.String()
+	}
+	if code, _ := try(""); code != http.StatusUnauthorized {
+		t.Errorf("saved password not asked for: %d", code)
+	}
+	// The command's host= overrides the saved one; the saved password stays
+	if code, body := try("saved"); code != http.StatusOK || body != "cmd.test" {
+		t.Errorf("with the saved password: %d %q", code, body)
+	}
+
+	// Changing the settings applies to the open tunnel
+	if !srv.SetTunnelOptions("acct_pro", "myapp", tunnel.Options{}) {
+		t.Fatal("SetTunnelOptions() found no tunnel")
+	}
+	if code, _ := try(""); code != http.StatusOK {
+		t.Errorf("after removing the password: %d", code)
+	}
+	if srv.SetTunnelOptions("acct_other", "myapp", tunnel.Options{}) {
+		t.Error("another account changed the tunnel's settings")
 	}
 }
