@@ -101,6 +101,7 @@ type Limits struct {
 	BrowserWarning    bool          // browsers see the warning page before reaching the tunnel
 	Options           []string      // ssh command options the client may set (see AllOptions); nil allows none
 	OptionsNote       string        // added to the error when a client sets an option it may not, e.g. how to get it
+	Inspect           bool          // keep the latest requests for the request inspector (tunnel.Inspector)
 }
 
 // Options clients can set in the ssh command; see tunnel.ParseOptions.

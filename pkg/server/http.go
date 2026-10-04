@@ -163,6 +163,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	requestStart := time.Now()
 	target := r.URL.RequestURI()
+	// The inspector keeps what the app was sent and what it answered
+	insp := tun.Inspector()
+	var reqBody, respBody *tunnel.Capture
+	var outHost string
+	var outHeader, respHeader http.Header
+	if insp != nil && r.Body != nil && r.Body != http.NoBody {
+		reqBody = tunnel.NewCapture(r.Body)
+		r.Body = reqBody
+	}
 	var proxyErr error
 	var body *limitedReadCloser // the response body, once the app responds
 	r = r.WithContext(tunnel.WithOrigin(r.Context(), originAddr(client, r.RemoteAddr)))
@@ -186,6 +195,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				pr.Out.Host = opts.Host
 			}
 			setForwardedHeaders(pr.Out.Header, pr.In, client)
+			if insp != nil {
+				outHost, outHeader = pr.Out.Host, pr.Out.Header.Clone()
+			}
 		},
 		Transport: tun.Transport(),
 		ModifyResponse: func(resp *http.Response) error {
@@ -205,6 +217,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				limit: config.MaxResponseBodySize,
 			}
 			resp.Body = body
+			if insp != nil {
+				respHeader = resp.Header.Clone()
+				respBody = tunnel.NewCapture(resp.Body)
+				resp.Body = respBody
+			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -237,6 +254,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Visitor: client.Addr.String(),
 			Detail:  detail,
 		})
+		if insp != nil {
+			insp.Add(tunnel.Exchange{
+				Time:           requestStart,
+				Method:         r.Method,
+				Target:         target,
+				Host:           outHost,
+				Visitor:        client.Addr.String(),
+				RequestHeader:  outHeader,
+				RequestBody:    reqBody.Body(),
+				Status:         sw.status,
+				ResponseHeader: respHeader,
+				ResponseBody:   respBody.Body(),
+				Duration:       time.Since(requestStart),
+				Note:           detail,
+			})
+		}
 		if p != nil {
 			panic(p)
 		}
@@ -254,6 +287,21 @@ func logEntry(tun *tunnel.Tunnel, e tunnel.Entry) {
 
 // logTunnlEvent logs a request that tunnl answered itself, without the app.
 func logTunnlEvent(tun *tunnel.Tunnel, r *http.Request, client clientip.Result, status int, note string) {
+	if insp := tun.Inspector(); insp != nil {
+		header := r.Header.Clone()
+		// A wrong tunnel password isn't for the inspector to show
+		header.Del("Authorization")
+		insp.Add(tunnel.Exchange{
+			Time:          time.Now(),
+			Method:        r.Method,
+			Target:        r.URL.RequestURI(),
+			Host:          r.Host,
+			Visitor:       client.Addr.String(),
+			RequestHeader: header,
+			Status:        status,
+			Note:          "answered by tunnl: " + note,
+		})
+	}
 	logEntry(tun, tunnel.Entry{
 		Time:      time.Now(),
 		Method:    r.Method,
@@ -396,6 +444,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 	closed.Note = fmt.Sprintf("closed after %s, %s",
 		tunnel.FormatDuration(time.Since(wsEntry.Time)), tunnel.FormatBytes(backendBytes+clientBytes))
 	logEntry(tun, closed)
+	if insp := tun.Inspector(); insp != nil {
+		insp.Add(tunnel.Exchange{
+			Time:          wsEntry.Time,
+			Method:        "WS",
+			Target:        wsEntry.Target,
+			Host:          r.Host,
+			Visitor:       wsEntry.Visitor,
+			RequestHeader: r.Header.Clone(),
+			Status:        http.StatusSwitchingProtocols,
+			Duration:      time.Since(wsEntry.Time),
+			Note:          closed.Note,
+		})
+	}
 }
 
 // bufferedConn is a net.Conn whose reads are served from r first.

@@ -29,6 +29,7 @@ type Tunnel struct {
 	transport      *http.Transport   // Reusable HTTP transport for proxying
 	pendingOpens   chan struct{}     // slots for channel opens awaiting the client's answer
 	logger         *RequestLogger    // Async request logger for SSH terminal output
+	inspector      *Inspector        // the latest requests, if the tunnel's limits allow it
 	baseOpts       Options           // saved settings, e.g. for an account's subdomain
 	opts           Options           // what the client asked for in the ssh command; overrides baseOpts
 	optsSet        bool              // opts are final; until then, requests wait
@@ -145,6 +146,21 @@ func (t *Tunnel) Logger() *RequestLogger {
 // Transport returns the reusable HTTP transport for this tunnel
 func (t *Tunnel) Transport() *http.Transport {
 	return t.transport
+}
+
+// EnableInspector makes the tunnel keep its latest requests. Call it before
+// the tunnel is shared.
+func (t *Tunnel) EnableInspector() {
+	t.mu.Lock()
+	t.inspector = NewInspector()
+	t.mu.Unlock()
+}
+
+// Inspector returns the tunnel's inspector, or nil if it keeps no requests.
+func (t *Tunnel) Inspector() *Inspector {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.inspector
 }
 
 // AwaitOptions makes requests wait for SetOptions, since the client sends

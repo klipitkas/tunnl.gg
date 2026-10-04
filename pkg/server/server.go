@@ -269,6 +269,9 @@ func (s *Server) RegisterTunnel(sub string, conn sshConnection, bindAddr string,
 	t := tunnel.New(sub, conn, bindAddr, bindPort, clientIP)
 	t.Limits = limits
 	t.AccountID = accountID
+	if limits.Inspect {
+		t.EnableInspector()
+	}
 	t.AwaitOptions()
 	s.tunnels[sub] = t
 	return t
