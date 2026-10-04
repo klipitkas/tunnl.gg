@@ -25,9 +25,15 @@ type Tunnel struct {
 	mu             sync.Mutex
 	rateLimiter    *RateLimiter      // Tunnel-wide rate limit across all visitors
 	visitorLimiter *KeyedRateLimiter // Per-visitor rate limit
+	passwordFails  *KeyedRateLimiter // Per-visitor budget of wrong passwords
 	transport      *http.Transport   // Reusable HTTP transport for proxying
 	pendingOpens   chan struct{}     // slots for channel opens awaiting the client's answer
 	logger         *RequestLogger    // Async request logger for SSH terminal output
+	opts           Options           // what the client asked for in the ssh command
+	optsSet        bool              // opts are final; until then, requests wait
+	optsReady      chan struct{}     // closed once opts are final or the tunnel closes; nil if never awaited
+	releaseOnce    sync.Once
+	closed         bool
 }
 
 // New creates a new tunnel that forwards traffic to the client over opener
@@ -47,6 +53,11 @@ func New(subdomain string, opener ChannelOpener, bindAddr string, bindPort uint3
 		visitorLimiter: NewKeyedRateLimiter(
 			config.VisitorRequestsPerSecond,
 			config.VisitorBurstSize,
+			config.MaxTrackedVisitors,
+		),
+		passwordFails: NewKeyedRateLimiter(
+			config.PasswordFailuresPerSecond,
+			config.PasswordFailureBurst,
 			config.MaxTrackedVisitors,
 		),
 	}
@@ -105,6 +116,17 @@ func (t *Tunnel) AllowRequest(visitor string) bool {
 	return t.rateLimiter.Allow()
 }
 
+// PasswordTriesLeft reports whether visitor may try a password. Check it
+// before the password, so a visitor out of tries learns nothing from a guess.
+func (t *Tunnel) PasswordTriesLeft(visitor string) bool {
+	return t.passwordFails.Available(visitor)
+}
+
+// PasswordFailed records a wrong password from visitor.
+func (t *Tunnel) PasswordFailed(visitor string) {
+	t.passwordFails.Allow(visitor)
+}
+
 // SetLogger sets the request logger for SSH terminal output
 func (t *Tunnel) SetLogger(l *RequestLogger) {
 	t.mu.Lock()
@@ -124,6 +146,54 @@ func (t *Tunnel) Transport() *http.Transport {
 	return t.transport
 }
 
+// AwaitOptions makes requests wait for SetOptions, since the client sends
+// its options after the tunnel is registered. Call it before the tunnel is
+// shared. Without it, the tunnel has no options and requests don't wait.
+func (t *Tunnel) AwaitOptions() {
+	t.mu.Lock()
+	t.optsReady = make(chan struct{})
+	t.mu.Unlock()
+}
+
+// SetOptions sets the client's options and lets waiting requests through.
+func (t *Tunnel) SetOptions(o Options) {
+	t.mu.Lock()
+	t.opts, t.optsSet = o, true
+	t.mu.Unlock()
+	t.releaseWaiters()
+}
+
+func (t *Tunnel) releaseWaiters() {
+	t.mu.Lock()
+	ready := t.optsReady
+	t.mu.Unlock()
+	if ready != nil {
+		t.releaseOnce.Do(func() { close(ready) })
+	}
+}
+
+// Options waits until the tunnel's options are known and returns them. It
+// returns false if ctx ends first or the tunnel closes without them: the
+// request must not be served, since the options may restrict who gets in.
+func (t *Tunnel) Options(ctx context.Context) (Options, bool) {
+	t.mu.Lock()
+	ready := t.optsReady
+	t.mu.Unlock()
+	if ready != nil {
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			return Options{}, false
+		}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed || (ready != nil && !t.optsSet) {
+		return Options{}, false
+	}
+	return t.opts, true
+}
+
 // Close cleans up the tunnel's transport and logger. Open channels close with
 // the SSH connection.
 func (t *Tunnel) Close() {
@@ -131,9 +201,11 @@ func (t *Tunnel) Close() {
 		t.transport.CloseIdleConnections()
 	}
 	t.mu.Lock()
+	t.closed = true
 	l := t.logger
 	t.logger = nil
 	t.mu.Unlock()
+	t.releaseWaiters()
 	if l != nil {
 		// Don't wait for the log to flush: callers may hold locks, and a client
 		// that stopped reading would block the write until its connection

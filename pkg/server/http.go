@@ -25,6 +25,11 @@ import (
 
 var errResponseTooLarge = errors.New("response body too large")
 
+// optionsWaitTimeout bounds how long a request to a new tunnel waits for
+// the client's options. The SSH side waits at most 5 seconds for the session
+// and 5 more for its command.
+const optionsWaitTimeout = 15 * time.Second
+
 // ServeHTTP implements http.Handler for HTTPS requests
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
@@ -57,9 +62,27 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The client sends its options just after the tunnel opens; until then
+	// it's unknown who may get in
+	waitCtx, cancelWait := context.WithTimeout(r.Context(), optionsWaitTimeout)
+	opts, ok := tun.Options(waitCtx)
+	cancelWait()
+	if !ok {
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	client := s.clientIPs.Resolve(r.RemoteAddr, r.Header)
+	// Before rate limiting, so visitors who aren't allowed can't use up the
+	// tunnel's budget
+	if !opts.Allows(client.Addr) {
+		logTunnlEvent(tun, r, client, http.StatusForbidden, "not on the tunnel's allowlist")
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
 	// Throttle only the visitor: the tunnel owner doesn't control who sends
 	// traffic to their URL, so exceeding the limit must not affect the tunnel.
-	client := s.clientIPs.Resolve(r.RemoteAddr, r.Header)
 	visitor := visitorKey(client.Addr.String())
 	if !tun.AllowRequest(visitor) {
 		logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "rate limited by tunnl")
@@ -70,6 +93,28 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	defer tun.BeginRequest()()
 	s.IncrementRequests()
+
+	// After rate limiting, which slows down password guessing
+	if opts.Auth != nil {
+		if !tun.PasswordTriesLeft(visitor) {
+			logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "too many wrong passwords (tunnl limit)")
+			w.Header().Set("Retry-After", "10")
+			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+			return
+		}
+		if !opts.Auth.Check(r) {
+			// Browsers ask without credentials first: only guesses count
+			if _, _, sent := r.BasicAuth(); sent {
+				tun.PasswordFailed(visitor)
+			}
+			logTunnlEvent(tun, r, client, http.StatusUnauthorized, "no or wrong password")
+			w.Header().Set("WWW-Authenticate", `Basic realm="`+sub+"."+s.domain+`", charset="UTF-8"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		// The tunnel's password is not for the app
+		r.Header.Del("Authorization")
+	}
 
 	// Show interstitial warning for browser requests
 	if tun.Limits.BrowserWarning && isBrowserRequest(r) &&
@@ -95,7 +140,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		defer s.wsPerTunnel.release(sub)
 
-		s.handleWebSocket(w, r, tun, sub, client)
+		s.handleWebSocket(w, r, tun, sub, client, opts)
 		return
 	}
 
@@ -137,6 +182,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr.Out.URL.Scheme = "http"
 			pr.Out.URL.Host = pr.In.Host
 			pr.Out.Host = pr.In.Host
+			if opts.Host != "" {
+				pr.Out.Host = opts.Host
+			}
 			setForwardedHeaders(pr.Out.Header, pr.In, client)
 		},
 		Transport: tun.Transport(),
@@ -263,7 +311,7 @@ func describeCutOff(body *limitedReadCloser) string {
 	}
 }
 
-func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tunnel.Tunnel, sub string, client clientip.Result) {
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tunnel.Tunnel, sub string, client clientip.Result, opts tunnel.Options) {
 	wsEntry := tunnel.Entry{
 		Time:    time.Now(),
 		Method:  "WS",
@@ -306,6 +354,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 	// The upgrade request is written as-is, so give the app the same
 	// forwarding headers as proxied requests
 	setForwardedHeaders(r.Header, r, client)
+	if opts.Host != "" {
+		r.Host = opts.Host
+	}
 	if err := r.Write(backendConn); err != nil {
 		log.Printf("WebSocket request write error for %s: %v", sub, err)
 		return

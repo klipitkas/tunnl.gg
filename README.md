@@ -18,6 +18,7 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 - QR code of the URL in the terminal, for opening the tunnel on a phone
 - Live, colored request log in your terminal: path and query, status, size, timing, and visitor, with plain-words explanations when a request fails
 - Optional stable URL tied to your SSH key (`stable@`), no account needed
+- Options in the `ssh` command: password protection, IP allowlists, and a Host header rewrite for dev servers that block unknown hosts
 - HTTPS for every tunnel with a wildcard certificate you provide (e.g. from Let's Encrypt)
 - WebSocket support
 - Comprehensive rate limiting and abuse protection
@@ -300,6 +301,25 @@ ssh -t -R 80:localhost:8080 stable@proxy.tunnl.gg
   after your laptop slept) replaces the old connection.
 - The URL can't be worked out from your public key, but changes if the server's host
   key changes.
+
+### Options
+
+Add options after the host, as `name=value`:
+
+```bash
+ssh -t -R 80:localhost:5173 proxy.tunnl.gg host=localhost auth=me:secret allow=203.0.113.7
+```
+
+| Option | What it does |
+|--------|--------------|
+| `host=localhost:3000` | Sends this `Host` header to your app instead of the public one. Vite, Django's `ALLOWED_HOSTS`, Rails and webpack-dev-server reject unknown hosts ("Blocked request"); this fixes it without changing their config. `X-Forwarded-Host` still carries the public host. |
+| `auth=user:password` | Visitors must sign in with HTTP basic authentication. The password isn't passed on to your app. Each visitor gets 10 wrong passwords, then one every 10 seconds. |
+| `allow=203.0.113.7,198.51.100.0/24` | Only visitors from these IPs or networks get through; others get 403. Repeat `allow=` to add more. |
+
+`ssh ... proxy.tunnl.gg help` lists them. Invalid options end the session with an
+error. The options are visible to the server, and `auth=` is saved in your shell
+history like any command. A server can restrict which options anonymous clients may
+use (`Server.SetFreeLimits`); by default they may use all of them.
 
 ### Expose a Different Host
 

@@ -27,6 +27,11 @@ const (
 	BurstSize                = 400  // max burst per tunnel
 	MaxTrackedVisitors       = 1024 // visitors tracked per tunnel; extras share one bucket
 
+	// Wrong passwords for a tunnel with auth=, per visitor per tunnel: a
+	// burst for typos, then one every 10 seconds
+	PasswordFailureBurst      = 10
+	PasswordFailuresPerSecond = 0.1
+
 	// Request size limits
 	MaxRequestBodySize = 128 * 1024 * 1024 // 128MB
 
@@ -94,6 +99,28 @@ type Limits struct {
 	InactivityTimeout time.Duration // closes a tunnel after this long without traffic; 0 means never
 	MaxLifetime       time.Duration // closes a tunnel after this long regardless of activity; 0 means never
 	BrowserWarning    bool          // browsers see the warning page before reaching the tunnel
+	Options           []string      // ssh command options the client may set (see AllOptions); nil allows none
+	OptionsNote       string        // added to the error when a client sets an option it may not, e.g. how to get it
+}
+
+// Options clients can set in the ssh command; see tunnel.ParseOptions.
+const (
+	OptionHost  = "host"  // rewrite the Host header sent to the app
+	OptionAuth  = "auth"  // HTTP basic authentication for visitors
+	OptionAllow = "allow" // visitor IP allowlist
+)
+
+// AllOptions lists every option.
+var AllOptions = []string{OptionHost, OptionAuth, OptionAllow}
+
+// AllowsOption reports whether a client with these limits may set the option.
+func (l Limits) AllowsOption(name string) bool {
+	for _, o := range l.Options {
+		if o == name {
+			return true
+		}
+	}
+	return false
 }
 
 // FreeLimits returns the limits for anonymous clients.
@@ -103,6 +130,7 @@ func FreeLimits() Limits {
 		InactivityTimeout: InactivityTimeout,
 		MaxLifetime:       MaxTunnelLifetime,
 		BrowserWarning:    true,
+		Options:           AllOptions,
 	}
 }
 

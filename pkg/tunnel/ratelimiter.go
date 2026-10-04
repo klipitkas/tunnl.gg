@@ -108,6 +108,21 @@ func (k *KeyedRateLimiter) Allow(key string) bool {
 	return b.allow(now)
 }
 
+// Available reports whether Allow would allow key now, without using a token.
+func (k *KeyedRateLimiter) Available(key string) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	b, ok := k.buckets[key]
+	if !ok {
+		if len(k.buckets) < k.maxKeys {
+			return true // a new key starts with a full bucket
+		}
+		b = k.overflow
+	}
+	return b.tokens+time.Since(b.lastRefill).Seconds()*b.refillRate >= 1
+}
+
 // prune removes buckets that have fully refilled. Must be called with k.mu held.
 func (k *KeyedRateLimiter) prune(now time.Time) {
 	k.lastPrune = now

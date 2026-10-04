@@ -43,6 +43,7 @@ type Server struct {
 	accountConns    map[string][]*ssh.ServerConn // SSH connections per account ID for forced closure
 	keyConns        map[string][]*ssh.ServerConn // SSH connections per client key fingerprint for forced closure
 	accounts        AccountStore                 // nil unless the deployment has accounts
+	freeLimits      config.Limits                // for anonymous clients; see SetFreeLimits
 	mu              sync.RWMutex
 	sshConfig       *ssh.ServerConfig
 	domain          string
@@ -75,6 +76,7 @@ func New(hostKeyPath string, domain string) (*Server, error) {
 		accountConns:  make(map[string][]*ssh.ServerConn),
 		keyConns:      make(map[string][]*ssh.ServerConn),
 		abuseTracker:  NewAbuseTracker(),
+		freeLimits:    config.FreeLimits(),
 		wsPerTunnel:   newConnLimiter(config.MaxWebSocketsPerTunnel),
 		wsPerVisitor:  newConnLimiter(config.MaxWebSocketsPerVisitor),
 		reqPerTunnel:  newConnLimiter(config.MaxInFlightPerTunnel),
@@ -204,7 +206,7 @@ func (s *Server) CheckAndReserveConnection(clientIP string, acct *Account) (slot
 
 	// A zero limit means no limit for accounts. The prefix keeps account IDs
 	// from colliding with IPs.
-	slot, limit, per := clientIP, config.FreeLimits().MaxTunnels, "IP"
+	slot, limit, per := clientIP, s.FreeLimits().MaxTunnels, "IP"
 	if acct != nil {
 		slot, limit, per = "account:"+acct.ID, acct.Limits.MaxTunnels, "account"
 	}
@@ -238,6 +240,21 @@ func (s *Server) ReleaseConnection(slot string) {
 	s.mu.Unlock()
 }
 
+// SetFreeLimits sets the limits for anonymous clients' tunnels, instead of
+// config.FreeLimits. Call it before serving.
+func (s *Server) SetFreeLimits(l config.Limits) {
+	s.mu.Lock()
+	s.freeLimits = l
+	s.mu.Unlock()
+}
+
+// FreeLimits returns the limits for anonymous clients' tunnels.
+func (s *Server) FreeLimits() config.Limits {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.freeLimits
+}
+
 // RegisterTunnel registers a tunnel for conn, with the given limits, under a
 // subdomain it reserved. It returns nil if conn no longer holds sub, so a late
 // registration can't outlive its connection's cleanup or take over another
@@ -252,6 +269,7 @@ func (s *Server) RegisterTunnel(sub string, conn sshConnection, bindAddr string,
 	t := tunnel.New(sub, conn, bindAddr, bindPort, clientIP)
 	t.Limits = limits
 	t.AccountID = accountID
+	t.AwaitOptions()
 	s.tunnels[sub] = t
 	return t
 }

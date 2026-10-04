@@ -108,6 +108,13 @@ func startTestTunnel(t *testing.T, backend http.Handler) *testTunnel {
 // forwards tunnel traffic to backend, and waits for the tunnel to go live.
 func openTunnel(t *testing.T, srv *Server, addr string, clientConfig *ssh.ClientConfig, backend http.Handler) *testTunnel {
 	t.Helper()
+	return openTunnelCommand(t, srv, addr, clientConfig, backend, "")
+}
+
+// openTunnelCommand is openTunnel with command after the host, like
+// "ssh -t -R ... proxy.tunnl.gg host=localhost", or a shell if it's empty.
+func openTunnelCommand(t *testing.T, srv *Server, addr string, clientConfig *ssh.ClientConfig, backend http.Handler, command string) *testTunnel {
+	t.Helper()
 	client, err := ssh.Dial("tcp", addr, clientConfig)
 	if err != nil {
 		t.Fatalf("ssh.Dial() error: %v", err)
@@ -150,8 +157,13 @@ func openTunnel(t *testing.T, srv *Server, addr string, clientConfig *ssh.Client
 	if err := session.RequestPty("xterm", 24, 80, ssh.TerminalModes{}); err != nil {
 		t.Fatalf("RequestPty() error: %v", err)
 	}
-	if err := session.Shell(); err != nil {
-		t.Fatalf("Shell() error: %v", err)
+	if command == "" {
+		err = session.Shell()
+	} else {
+		err = session.Start(command)
+	}
+	if err != nil {
+		t.Fatalf("starting the session: %v", err)
 	}
 
 	output := &syncBuffer{}

@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -67,7 +69,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	// account is closed
 	s.RegisterSSHConn(clientIP, sshConn)
 	defer s.UnregisterSSHConn(clientIP, sshConn)
-	limits, accountID := config.FreeLimits(), ""
+	limits, accountID := s.FreeLimits(), ""
 	if acct != nil {
 		limits, accountID = acct.Limits, acct.ID
 		s.addConn(s.accountConns, acct.ID, sshConn)
@@ -162,7 +164,6 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	}
 
 	url := fmt.Sprintf("https://%s.%s", sub, s.domain)
-	urlMessage := sessionBanner(url, s.domain, urlNote(stable, acct), limits)
 
 	// endSession tells the user why the session is ending, with a summary of
 	// its traffic, then closes the connection
@@ -247,7 +248,23 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		return
 	}
 
-	fmt.Fprint(channel, urlMessage)
+	// Options come in the session's exec request, before which requests to
+	// the tunnel wait: they may restrict who gets in
+	opts, err := readOptions(requests, limits)
+	if err != nil {
+		msg := "\r\n  ERROR: " + err.Error() + "\r\n\r\n" + strings.ReplaceAll(tunnel.OptionsUsage, "\n", "\r\n") + "\r\n\r\n"
+		status := uint32(1)
+		if errors.Is(err, tunnel.ErrHelp) {
+			msg, status = "\r\n"+strings.ReplaceAll(tunnel.OptionsUsage, "\n", "\r\n")+"\r\n\r\n", 0
+		}
+		fmt.Fprint(channel, msg)
+		channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
+		channel.Close()
+		return
+	}
+	tun.SetOptions(opts)
+
+	fmt.Fprint(channel, sessionBanner(url, s.domain, urlNote(stable, acct), limits, opts))
 
 	logger := tunnel.NewRequestLogger(channel, config.LogBufferSize)
 	tun.SetLogger(logger)
@@ -257,7 +274,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	go func(ch ssh.Channel, reqs <-chan *ssh.Request) {
 		for req := range reqs {
 			switch req.Type {
-			case "pty-req", "shell":
+			case "pty-req", "shell", "env", "window-change":
 				if req.WantReply {
 					req.Reply(true, nil)
 				}
@@ -306,9 +323,10 @@ const (
 	bannerPurple = "\033[38;5;141m"
 )
 
-// sessionBanner is shown when a tunnel goes live: its URL, expiry, a QR code
-// of the URL, and the header of the request log that follows.
-func sessionBanner(url, domain, urlNote string, limits config.Limits) string {
+// sessionBanner is shown when a tunnel goes live: its URL, expiry and
+// options, a QR code of the URL, and the header of the request log that
+// follows.
+func sessionBanner(url, domain, urlNote string, limits config.Limits, opts tunnel.Options) string {
 	label := func(name string) string {
 		return bannerGray + fmt.Sprintf("  %-9s", name) + bannerReset
 	}
@@ -317,13 +335,92 @@ func sessionBanner(url, domain, urlNote string, limits config.Limits) string {
 		bannerGreen + "  ● Tunnel is live" + bannerReset + bannerGray + " on " + domain + bannerReset + "\r\n\r\n" +
 		label("URL") + bannerPurple + url + bannerReset + "\r\n" +
 		label("") + bannerGray + urlNote + bannerReset + "\r\n" +
-		label("Expires") + expiryText(limits) + "\r\n\r\n"
+		label("Expires") + expiryText(limits) + "\r\n"
+	if opts.Host != "" {
+		banner += label("Host") + opts.Host + bannerGray + " is sent to your app" + bannerReset + "\r\n"
+	}
+	if opts.Auth != nil {
+		banner += label("Password") + bannerGray + "visitors sign in as " + bannerReset + opts.Auth.User + "\r\n"
+	}
+	if len(opts.Allow) > 0 {
+		nets := make([]string, len(opts.Allow))
+		for i, p := range opts.Allow {
+			nets[i] = p.String()
+			if p.IsSingleIP() {
+				nets[i] = p.Addr().String()
+			}
+		}
+		banner += label("Allowed") + strings.Join(nets, ", ") + bannerGray + " only" + bannerReset + "\r\n"
+	}
+	banner += "\r\n"
 
 	// QR code of the URL, for opening the tunnel on a phone
 	if code, err := renderQR(url, "  "); err == nil {
 		banner += code + "\r\n"
 	}
 	return banner + bannerGray + "  Requests appear below. Press Ctrl+C to stop." + bannerReset + "\r\n\r\n" + tunnel.Header()
+}
+
+// commandTimeout bounds how long a session waits for the client's shell or
+// exec request. Clients that send neither get no options.
+const commandTimeout = 5 * time.Second
+
+// readOptions reads session requests up to the client's shell or exec
+// request and returns the options in its command. It answers the requests
+// before it, like pty-req, and returns an error for invalid options and for
+// options limits don't allow.
+func readOptions(reqs <-chan *ssh.Request, limits config.Limits) (tunnel.Options, error) {
+	timeout := time.After(commandTimeout)
+	for {
+		select {
+		case req, ok := <-reqs:
+			if !ok {
+				return tunnel.Options{}, nil
+			}
+			switch req.Type {
+			case "shell":
+				if req.WantReply {
+					req.Reply(true, nil)
+				}
+				return tunnel.Options{}, nil
+			case "exec":
+				var cmd struct{ Command string }
+				if err := ssh.Unmarshal(req.Payload, &cmd); err != nil {
+					if req.WantReply {
+						req.Reply(false, nil)
+					}
+					return tunnel.Options{}, errors.New("couldn't read the command")
+				}
+				if req.WantReply {
+					req.Reply(true, nil)
+				}
+				opts, err := tunnel.ParseOptions(cmd.Command)
+				if err != nil {
+					return tunnel.Options{}, err
+				}
+				for _, name := range opts.Names() {
+					if !limits.AllowsOption(name) {
+						msg := name + "= isn't available for this tunnel."
+						if limits.OptionsNote != "" {
+							msg += " " + limits.OptionsNote
+						}
+						return tunnel.Options{}, errors.New(msg)
+					}
+				}
+				return opts, nil
+			case "pty-req", "env", "window-change":
+				if req.WantReply {
+					req.Reply(true, nil)
+				}
+			default:
+				if req.WantReply {
+					req.Reply(false, nil)
+				}
+			}
+		case <-timeout:
+			return tunnel.Options{}, nil
+		}
+	}
 }
 
 // urlNote explains in the session banner whether the URL stays the same.
