@@ -383,6 +383,13 @@ func sessionBanner(url, domain, urlNote string, limits config.Limits, opts tunne
 		}
 		banner += label("Allowed") + strings.Join(nets, ", ") + bannerGray + " only" + bannerReset + "\r\n"
 	}
+	if len(opts.CORS) > 0 {
+		sites := strings.Join(opts.CORS, ", ")
+		if opts.CORS[0] == "*" {
+			sites = "any site"
+		}
+		banner += label("CORS") + sites + bannerGray + " can call it from a browser" + bannerReset + "\r\n"
+	}
 	banner += "\r\n"
 
 	// QR code of the URL, for opening the tunnel on a phone

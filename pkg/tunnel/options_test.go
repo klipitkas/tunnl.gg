@@ -166,3 +166,28 @@ func TestNewBasicAuth(t *testing.T) {
 		t.Error("the right password was refused")
 	}
 }
+
+func TestParseCORS(t *testing.T) {
+	opts, err := ParseOptions("cors=https://App.example.com,http://localhost:5173/ cors=https://app.example.com")
+	if err != nil || strings.Join(opts.CORS, " ") != "https://app.example.com http://localhost:5173" {
+		t.Fatalf("CORS = %v, %v", opts.CORS, err)
+	}
+	if allow, creds := opts.CORSOrigin("https://app.example.com"); allow != "https://app.example.com" || !creds {
+		t.Errorf("listed origin: %q %v", allow, creds)
+	}
+	if allow, _ := opts.CORSOrigin("https://evil.example"); allow != "" {
+		t.Errorf("unlisted origin allowed: %q", allow)
+	}
+	any, _ := ParseOptions("cors=*")
+	if allow, creds := any.CORSOrigin("https://anything.example"); allow != "*" || creds {
+		t.Errorf("cors=*: %q %v; credentials must never come with *", allow, creds)
+	}
+	if allow, _ := any.CORSOrigin(""); allow != "" {
+		t.Error("requests without an Origin get no CORS headers")
+	}
+	for _, bad := range []string{"cors=example.com", "cors=ftp://x.example", "cors=https://x.example/path", "cors=https://u:p@x.example", "cors=*,https://x.example"} {
+		if _, err := ParseOptions(bad); err == nil {
+			t.Errorf("ParseOptions(%q) should fail", bad)
+		}
+	}
+}

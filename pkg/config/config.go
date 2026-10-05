@@ -109,10 +109,11 @@ const (
 	OptionHost  = "host"  // rewrite the Host header sent to the app
 	OptionAuth  = "auth"  // HTTP basic authentication for visitors
 	OptionAllow = "allow" // visitor IP allowlist
+	OptionCORS  = "cors"  // CORS headers for browsers on other sites
 )
 
 // AllOptions lists every option.
-var AllOptions = []string{OptionHost, OptionAuth, OptionAllow}
+var AllOptions = []string{OptionHost, OptionAuth, OptionAllow, OptionCORS}
 
 // AllowsOption reports whether a client with these limits may set the option.
 func (l Limits) AllowsOption(name string) bool {

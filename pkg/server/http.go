@@ -94,6 +94,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer tun.BeginRequest()()
 	s.IncrementRequests()
 
+	// CORS preflights carry no credentials, so they're answered before the
+	// password check; otherwise a protected tunnel could never be called
+	// from another site. The allowlist and rate limits still apply.
+	corsAllow, corsCredentials := opts.CORSOrigin(r.Header.Get("Origin"))
+	if corsAllow != "" && r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+		h := w.Header()
+		setCORS(h, corsAllow, corsCredentials)
+		h.Set("Access-Control-Allow-Methods", r.Header.Get("Access-Control-Request-Method"))
+		if requested := r.Header.Get("Access-Control-Request-Headers"); requested != "" {
+			h.Set("Access-Control-Allow-Headers", requested)
+		}
+		h.Set("Access-Control-Max-Age", "600")
+		logTunnlEvent(tun, r, client, http.StatusNoContent, "CORS preflight answered")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	// For the answers tunnl gives itself below, so the page can read them
+	setCORS(w.Header(), corsAllow, corsCredentials)
+
 	// After rate limiting, which slows down password guessing
 	if opts.Auth != nil {
 		if !tun.PasswordTriesLeft(visitor) {
@@ -179,8 +198,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer stopDeadlines()
 	sw := &statusCaptureWriter{ResponseWriter: dw}
 
-	// The tunneled app decides its own response headers
+	// The tunneled app decides its own response headers; CORS ones are added
+	// back if it sets none
 	for name := range securityHeaders {
+		w.Header().Del(name)
+	}
+	for _, name := range corsHeaders {
 		w.Header().Del(name)
 	}
 
@@ -206,6 +229,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					resp.Header.Set(name, value)
 				}
 			}
+			setCORS(resp.Header, corsAllow, corsCredentials)
 
 			// Enforce response body size limit
 			if resp.ContentLength > config.MaxResponseBodySize {
@@ -228,6 +252,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Proxy error for %s: %v", sub, err)
 			proxyErr = err
 			setSecurityHeaders(w)
+			setCORS(w.Header(), corsAllow, corsCredentials)
 			if errors.Is(err, errResponseTooLarge) {
 				http.Error(w, "Response Too Large", http.StatusBadGateway)
 				return
@@ -511,6 +536,24 @@ var securityHeaders = map[string]string{
 var proxiedDefaultHeaders = map[string]string{
 	"X-Content-Type-Options": "nosniff",
 	"Referrer-Policy":        "strict-origin-when-cross-origin",
+}
+
+// corsHeaders are the headers setCORS sets.
+var corsHeaders = []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Credentials"}
+
+// setCORS lets the page on an allowed origin read the response, unless the
+// app answered with its own CORS headers.
+func setCORS(h http.Header, allow string, credentials bool) {
+	if allow == "" || h.Get("Access-Control-Allow-Origin") != "" {
+		return
+	}
+	h.Set("Access-Control-Allow-Origin", allow)
+	if allow != "*" {
+		h.Add("Vary", "Origin")
+	}
+	if credentials {
+		h.Set("Access-Control-Allow-Credentials", "true")
+	}
 }
 
 func setSecurityHeaders(w http.ResponseWriter) {

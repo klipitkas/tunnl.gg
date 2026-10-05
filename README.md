@@ -315,6 +315,7 @@ ssh -t -R 80:localhost:5173 proxy.tunnl.gg host=localhost auth=me:secret allow=2
 | `host=localhost:3000` | Sends this `Host` header to your app instead of the public one. Vite, Django's `ALLOWED_HOSTS`, Rails and webpack-dev-server reject unknown hosts ("Blocked request"); this fixes it without changing their config. `X-Forwarded-Host` still carries the public host. |
 | `auth=user:password` | Visitors must sign in with HTTP basic authentication. The password isn't passed on to your app. Each visitor gets 10 wrong passwords, then one every 10 seconds. |
 | `allow=203.0.113.7,198.51.100.0/24` | Only visitors from these IPs or networks get through; others get 403. Repeat `allow=` to add more. |
+| `cors=https://app.example.com` | Lets pages on these sites call the tunnel from a browser, with cookies: tunnl answers CORS preflights, even on a password-protected tunnel, and adds the headers to responses unless the app sets its own. `cors=*` allows any site, without cookies. Repeat `cors=` to add more. |
 
 `ssh ... proxy.tunnl.gg help` lists them. Invalid options end the session with an
 error. The options are visible to the server, and `auth=` is saved in your shell
