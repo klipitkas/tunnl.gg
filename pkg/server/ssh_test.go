@@ -1,10 +1,12 @@
 package server
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/klipitkas/tunnl.gg/pkg/config"
+	"github.com/klipitkas/tunnl.gg/pkg/tunnel"
 )
 
 func TestExpiryText(t *testing.T) {
@@ -24,5 +26,23 @@ func TestExpiryText(t *testing.T) {
 				t.Errorf("expiryText() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSessionBannerUpgradeNote(t *testing.T) {
+	limits := config.FreeLimits()
+	plain := sessionBanner("https://x.example.com", "example.com", "note", limits, tunnel.Options{})
+
+	limits.UpgradeNote = "Pro: no time limits at https://example.com/pricing"
+	withNote := sessionBanner("https://x.example.com", "example.com", "note", limits, tunnel.Options{})
+	if !strings.Contains(withNote, limits.UpgradeNote) {
+		t.Errorf("banner is missing the upgrade note:\n%s", withNote)
+	}
+	// Without a note (the default, as on-prem), the banner has no extra line
+	if strings.Count(withNote, "\r\n") != strings.Count(plain, "\r\n")+1 {
+		t.Errorf("the note should add exactly one line")
+	}
+	if strings.Contains(plain, "Pro") {
+		t.Errorf("banner without a note mentions Pro:\n%s", plain)
 	}
 }

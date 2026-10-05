@@ -194,9 +194,13 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	// endSession tells the user why the session is ending, with a summary of
 	// its traffic, then closes the connection
-	endSession := func(reason string) {
+	endSession := func(reason, note string) {
 		if logger := tun.Logger(); logger != nil {
-			logger.Notice(reason + ". " + logger.Summary() + ".")
+			msg := reason + ". " + logger.Summary() + "."
+			if note != "" {
+				msg += " " + note
+			}
+			logger.Notice(msg)
 			// Flush before the connection closes, but don't wait on a client
 			// that stopped reading: closing the connection unblocks the write
 			logger.CloseWithin(logFlushTimeout)
@@ -223,8 +227,8 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 				if hasLifetime && !warned && remaining > 0 && remaining <= lifetimeWarning {
 					warned = true
 					if logger := tun.Logger(); logger != nil {
-						logger.Notice(fmt.Sprintf("This tunnel closes in %s (%s limit). %s",
-							formatDuration(remaining.Round(time.Minute)), formatDuration(limits.MaxLifetime), reconnectHint))
+						logger.Notice(strings.TrimSpace(fmt.Sprintf("This tunnel closes in %s (%s limit). %s %s",
+							formatDuration(remaining.Round(time.Minute)), formatDuration(limits.MaxLifetime), reconnectHint, limits.UpgradeNote)))
 					}
 				}
 				if tun.IsExpired() {
@@ -233,7 +237,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 						reason = "Tunnel closed: reached the " + formatDuration(limits.MaxLifetime) + " limit"
 					}
 					log.Printf("Tunnel %s expired: %s", sub, reason)
-					endSession(reason)
+					endSession(reason, limits.UpgradeNote)
 					return
 				}
 			case <-ctx.Done():
@@ -313,7 +317,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 				if req.WantReply {
 					req.Reply(true, nil)
 				}
-				endSession("Stopped")
+				endSession("Stopped", "")
 				return
 			default:
 				if req.WantReply {
@@ -331,7 +335,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 			break
 		}
 		if buf[0] == 0x03 { // Ctrl+C
-			endSession("Stopped")
+			endSession("Stopped", "")
 			break
 		}
 	}
@@ -367,6 +371,9 @@ func sessionBanner(url, domain, urlNote string, limits config.Limits, opts tunne
 		label("URL") + bannerPurple + url + bannerReset + "\r\n" +
 		label("") + bannerGray + urlNote + bannerReset + "\r\n" +
 		label("Expires") + expiryText(limits) + "\r\n"
+	if limits.UpgradeNote != "" {
+		banner += label("") + bannerGray + limits.UpgradeNote + bannerReset + "\r\n"
+	}
 	if opts.Host != "" {
 		banner += label("Host") + opts.Host + bannerGray + " is sent to your app" + bannerReset + "\r\n"
 	}

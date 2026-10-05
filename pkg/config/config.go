@@ -101,6 +101,7 @@ type Limits struct {
 	BrowserWarning    bool          // browsers see the warning page before reaching the tunnel
 	Options           []string      // ssh command options the client may set (see AllOptions); nil allows none
 	OptionsNote       string        // added to the error when a client sets an option it may not, e.g. how to get it
+	UpgradeNote       string        // shown with the time limits (in the banner, the warning before they close a tunnel, and when they do), e.g. how to lift them; empty shows nothing
 	Inspect           bool          // keep the latest requests for the request inspector (tunnel.Inspector)
 }
 
