@@ -29,6 +29,7 @@ type Tunnel struct {
 	transport      *http.Transport   // Reusable HTTP transport for proxying
 	pendingOpens   chan struct{}     // slots for channel opens awaiting the client's answer
 	logger         *RequestLogger    // Async request logger for SSH terminal output
+	traffic        trafficCounters   // since the server last took them; see TakeTraffic
 	inspector      *Inspector        // the latest requests, if the tunnel's limits allow it
 	baseOpts       Options           // saved settings, e.g. for an account's subdomain
 	opts           Options           // what the client asked for in the ssh command; overrides baseOpts

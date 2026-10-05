@@ -191,6 +191,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reqBody = tunnel.NewCapture(r.Body)
 		r.Body = reqBody
 	}
+	in := &countingReader{ReadCloser: r.Body}
+	if r.Body != nil && r.Body != http.NoBody {
+		r.Body = in
+	}
 	var proxyErr error
 	var body *limitedReadCloser // the response body, once the app responds
 	r = r.WithContext(tunnel.WithOrigin(r.Context(), originAddr(client, r.RemoteAddr)))
@@ -279,6 +283,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Visitor: client.Addr.String(),
 			Detail:  detail,
 		})
+		status := sw.status
+		if p != nil && status == 0 {
+			status = http.StatusBadGateway
+		}
+		tun.CountRequest(status, in.n, sw.bytes, time.Since(requestStart))
 		if insp != nil {
 			insp.Add(tunnel.Exchange{
 				Time:           requestStart,
@@ -312,6 +321,7 @@ func logEntry(tun *tunnel.Tunnel, e tunnel.Entry) {
 
 // logTunnlEvent logs a request that tunnl answered itself, without the app.
 func logTunnlEvent(tun *tunnel.Tunnel, r *http.Request, client clientip.Result, status int, note string) {
+	tun.CountRequest(status, -1, -1, 0)
 	if insp := tun.Inspector(); insp != nil {
 		header := r.Header.Clone()
 		// A wrong tunnel password isn't for the inspector to show
@@ -465,6 +475,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 	<-done
 	<-clientDone
 
+	tun.CountRequest(http.StatusSwitchingProtocols, backendBytes, clientBytes, time.Since(wsEntry.Time))
 	closed := wsEntry
 	closed.Time = time.Now()
 	closed.Note = fmt.Sprintf("closed after %s, %s",
@@ -751,4 +762,16 @@ func (s *Server) HTTPRedirectHandler() http.Handler {
 		target := "https://" + r.Host + r.URL.RequestURI()
 		http.Redirect(w, r, target, http.StatusMovedPermanently)
 	})
+}
+
+// countingReader counts what's read from a request body.
+type countingReader struct {
+	io.ReadCloser
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.ReadCloser.Read(p)
+	c.n += int64(n)
+	return n, err
 }

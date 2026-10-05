@@ -44,6 +44,8 @@ type Server struct {
 	keyConns        map[string][]*ssh.ServerConn // SSH connections per client key fingerprint for forced closure
 	accounts        AccountStore                 // nil unless the deployment has accounts
 	freeLimits      config.Limits                // for anonymous clients; see SetFreeLimits
+	trafficSink     func(TrafficReport)          // see SetTrafficSink
+	trafficStop     chan struct{}
 	mu              sync.RWMutex
 	sshConfig       *ssh.ServerConfig
 	domain          string
@@ -289,6 +291,8 @@ func (s *Server) RemoveTunnel(sub string, conn sshConnection) {
 	if t, ok := s.tunnels[sub]; ok {
 		t.Close()
 		delete(s.tunnels, sub)
+		// What it did since the last report, outside the lock
+		go s.reportTraffic(t)
 	}
 }
 
@@ -397,4 +401,61 @@ func closeConns(conns []*ssh.ServerConn) int {
 // Stop gracefully stops the server's background goroutines
 func (s *Server) Stop() {
 	s.abuseTracker.Stop()
+	s.mu.Lock()
+	if s.trafficStop != nil {
+		close(s.trafficStop)
+		s.trafficStop = nil
+	}
+	s.mu.Unlock()
+}
+
+// TrafficReport is a tunnel's traffic over a stretch of time.
+type TrafficReport struct {
+	Subdomain string
+	AccountID string // "" for anonymous clients
+	tunnel.Traffic
+}
+
+// SetTrafficSink sends each tunnel's traffic to sink every interval, and
+// what's left when a tunnel closes, for usage stats. Reports with nothing in
+// them are skipped. sink is called from other goroutines and shouldn't
+// block for long. Call it once, before serving.
+func (s *Server) SetTrafficSink(sink func(TrafficReport), every time.Duration) {
+	stop := make(chan struct{})
+	s.mu.Lock()
+	s.trafficSink, s.trafficStop = sink, stop
+	s.mu.Unlock()
+	go func() {
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.mu.RLock()
+				open := make([]*tunnel.Tunnel, 0, len(s.tunnels))
+				for _, t := range s.tunnels {
+					open = append(open, t)
+				}
+				s.mu.RUnlock()
+				for _, t := range open {
+					s.reportTraffic(t)
+				}
+			case <-stop:
+				return
+			}
+		}
+	}()
+}
+
+// reportTraffic sends t's traffic since the last report to the sink.
+func (s *Server) reportTraffic(t *tunnel.Tunnel) {
+	s.mu.RLock()
+	sink := s.trafficSink
+	s.mu.RUnlock()
+	if sink == nil {
+		return
+	}
+	if traffic := t.TakeTraffic(); !traffic.Zero() {
+		sink(TrafficReport{Subdomain: t.Subdomain, AccountID: t.AccountID, Traffic: traffic})
+	}
 }
