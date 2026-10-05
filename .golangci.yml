@@ -18,6 +18,7 @@ linters:
         - (golang.org/x/crypto/ssh.Channel).Close
         - (golang.org/x/crypto/ssh.Channel).CloseWrite
         - (*golang.org/x/crypto/ssh.Request).Reply
+        - (golang.org/x/crypto/ssh.Channel).SendRequest
         - (golang.org/x/crypto/ssh.NewChannel).Reject
         # Writes to an SSH session: a failed write means the session is closing
         - fmt.Fprint

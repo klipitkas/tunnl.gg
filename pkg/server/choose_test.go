@@ -67,7 +67,9 @@ func TestE2E_ChooseSubdomainRefused(t *testing.T) {
 	out := &syncBuffer{}
 	go io.Copy(out, stdout)
 	session.Shell()
-	waitFor(t, "the error", func() bool { return strings.Contains(out.String(), "someone-else isn't one of your account's subdomains") })
+	waitFor(t, "the error", func() bool {
+		return strings.Contains(out.String(), "someone-else isn't one of your account's subdomains")
+	})
 	if len(srv.Tunnels()) != 0 {
 		t.Error("a refused forward left a tunnel")
 	}
@@ -79,5 +81,7 @@ func TestE2E_AnonymousNameIgnored(t *testing.T) {
 	if tt.sub == "myapp" {
 		t.Fatal("an anonymous client got the subdomain it named")
 	}
-	waitFor(t, "the note", func() bool { return strings.Contains(tt.output.String(), "myapp ignored: choosing a subdomain needs an account") })
+	waitFor(t, "the note", func() bool {
+		return strings.Contains(tt.output.String(), "myapp ignored: choosing a subdomain needs an account")
+	})
 }

@@ -221,7 +221,9 @@ func (t *Tunnel) Replay(ctx context.Context, id uint64) (Exchange, error) {
 	}
 	defer resp.Body.Close()
 	body := NewCapture(resp.Body)
-	io.Copy(io.Discard, io.LimitReader(body, 1<<20))
+	if _, err := io.Copy(io.Discard, io.LimitReader(body, 1<<20)); err != nil {
+		e.Note = "the app's answer was cut off: " + err.Error()
+	}
 	e.Status = resp.StatusCode
 	e.ResponseHeader = resp.Header.Clone()
 	e.ResponseBody = body.Body()
