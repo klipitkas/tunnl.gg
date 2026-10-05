@@ -41,21 +41,25 @@ type Body struct {
 	Data      []byte
 	Size      int64 // bytes in the whole body, as far as it was read
 	Truncated bool  // Data is only the start of it
+	Dropped   bool  // Data was let go to make room for newer requests
 }
 
-// Inspector limits, so a busy tunnel holds at most about 3 MB.
+// Inspector limits, so a busy tunnel holds about 1 MB at most: past
+// MaxInspectorBytes of bodies, the oldest exchanges let theirs go.
 const (
-	InspectorSize    = 50       // exchanges kept per tunnel
-	MaxInspectedBody = 32 << 10 // bytes kept of each body
+	InspectorSize     = 50       // exchanges kept per tunnel
+	MaxInspectedBody  = 32 << 10 // bytes kept of each body
+	MaxInspectorBytes = 1 << 20  // bytes of bodies kept per tunnel
 )
 
 // Inspector keeps a tunnel's latest exchanges and tells subscribers about
 // new ones.
 type Inspector struct {
-	mu   sync.Mutex
-	next uint64
-	ring []Exchange // oldest first
-	subs map[chan Exchange]struct{}
+	mu    sync.Mutex
+	next  uint64
+	ring  []Exchange // oldest first
+	bytes int        // of the bodies in ring
+	subs  map[chan Exchange]struct{}
 }
 
 func NewInspector() *Inspector {
@@ -69,10 +73,18 @@ func (i *Inspector) Add(e Exchange) Exchange {
 	i.next++
 	e.ID = i.next
 	if len(i.ring) == InspectorSize {
+		i.bytes -= bodyBytes(i.ring[0])
 		copy(i.ring, i.ring[1:])
 		i.ring = i.ring[:InspectorSize-1]
 	}
 	i.ring = append(i.ring, e)
+	i.bytes += bodyBytes(e)
+	// Over budget: the oldest let their bodies go first
+	for j := 0; i.bytes > MaxInspectorBytes && j < len(i.ring)-1; j++ {
+		i.bytes -= bodyBytes(i.ring[j])
+		i.ring[j].RequestBody = dropped(i.ring[j].RequestBody)
+		i.ring[j].ResponseBody = dropped(i.ring[j].ResponseBody)
+	}
 	for ch := range i.subs {
 		// A subscriber that can't keep up misses exchanges rather than
 		// holding up the tunnel; it can list them again
@@ -82,6 +94,16 @@ func (i *Inspector) Add(e Exchange) Exchange {
 		}
 	}
 	return e
+}
+
+func bodyBytes(e Exchange) int { return len(e.RequestBody.Data) + len(e.ResponseBody.Data) }
+
+// dropped is b without its data.
+func dropped(b Body) Body {
+	if len(b.Data) == 0 {
+		return b
+	}
+	return Body{Size: b.Size, Truncated: true, Dropped: true}
 }
 
 // List returns the exchanges kept, oldest first.
@@ -165,6 +187,7 @@ var (
 	ErrNotInspected   = errors.New("this tunnel doesn't keep its requests")
 	ErrGone           = errors.New("that request is no longer kept: only the latest 50 are")
 	ErrBodyTruncated  = errors.New("that request's body was too large to keep in full, so it can't be sent again")
+	ErrBodyDropped    = errors.New("that request's body is no longer kept, to make room for newer requests, so it can't be sent again")
 	ErrCantReplayUpgr = errors.New("WebSocket requests can't be sent again")
 	ErrNotForwarded   = errors.New("tunnl answered that request itself, so it never reached your app and can't be sent again")
 )
@@ -180,6 +203,8 @@ func (t *Tunnel) Replay(ctx context.Context, id uint64) (Exchange, error) {
 	switch {
 	case !ok:
 		return Exchange{}, ErrGone
+	case orig.RequestBody.Dropped:
+		return Exchange{}, ErrBodyDropped
 	case orig.RequestBody.Truncated:
 		return Exchange{}, ErrBodyTruncated
 	case orig.Method == "WS":

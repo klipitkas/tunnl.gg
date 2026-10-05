@@ -59,3 +59,25 @@ func TestCapture(t *testing.T) {
 		t.Error("a nil capture is an empty body")
 	}
 }
+
+func TestInspectorMemoryBudget(t *testing.T) {
+	insp := NewInspector()
+	big := Body{Data: make([]byte, MaxInspectedBody), Size: MaxInspectedBody}
+	for range InspectorSize {
+		insp.Add(Exchange{RequestBody: big, ResponseBody: big})
+	}
+	list := insp.List()
+	kept := 0
+	for _, e := range list {
+		kept += len(e.RequestBody.Data) + len(e.ResponseBody.Data)
+	}
+	if kept > MaxInspectorBytes {
+		t.Errorf("kept %d bytes of bodies, over %d", kept, MaxInspectorBytes)
+	}
+	if first, last := list[0], list[len(list)-1]; !first.RequestBody.Dropped || first.RequestBody.Size != MaxInspectedBody || last.RequestBody.Dropped || len(last.ResponseBody.Data) != MaxInspectedBody {
+		t.Errorf("the oldest should let their bodies go, the newest keep them: first %+v, last dropped %v", first.RequestBody.Dropped, last.RequestBody.Dropped)
+	}
+	if len(list) != InspectorSize {
+		t.Errorf("kept %d exchanges, want all %d with or without bodies", len(list), InspectorSize)
+	}
+}
