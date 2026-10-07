@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -127,6 +128,26 @@ func TestE2E_CtrlCShowsSummary(t *testing.T) {
 	waitFor(t, "summary on stop", func() bool {
 		return strings.Contains(tt.sessionText(), "Stopped. 2 requests, 4 B served.")
 	})
+}
+
+// TestE2E_ClosedInputKeepsTunnel covers ssh run without a terminal, as by a
+// service or with < /dev/null: it closes its input at once, which isn't a
+// disconnect
+func TestE2E_ClosedInputKeepsTunnel(t *testing.T) {
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "still here")
+	}))
+	if err := tt.stdin.Close(); err != nil {
+		t.Fatalf("closing input: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	resp := tt.get(t, "/")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "still here" {
+		t.Fatalf("after closing input: %d %q, want 200 %q", resp.StatusCode, body, "still here")
+	}
 }
 
 func TestDescribeCutOff(t *testing.T) {

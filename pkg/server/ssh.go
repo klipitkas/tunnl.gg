@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"strings"
@@ -332,6 +333,12 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	for {
 		_, err := channel.Read(buf)
 		if err != nil {
+			// ssh without a terminal, as run by a service or with
+			// < /dev/null, closes its input at once. That isn't a
+			// disconnect: keep the tunnel until the connection ends.
+			if errors.Is(err, io.EOF) {
+				_ = sshConn.Wait() // its error is only why the connection ended
+			}
 			break
 		}
 		if buf[0] == 0x03 { // Ctrl+C
