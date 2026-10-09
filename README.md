@@ -316,11 +316,58 @@ ssh -t -R 80:localhost:5173 proxy.tunnl.gg host=localhost auth=me:secret allow=2
 | `auth=user:password` | Visitors must sign in with HTTP basic authentication. The password isn't passed on to your app. Each visitor gets 10 wrong passwords, then one every 10 seconds. |
 | `allow=203.0.113.7,198.51.100.0/24` | Only visitors from these IPs or networks get through; others get 403. Repeat `allow=` to add more. |
 | `cors=https://app.example.com` | Lets pages on these sites call the tunnel from a browser, with cookies: tunnl answers CORS preflights, even on a password-protected tunnel, and adds the headers to responses unless the app sets its own. `cors=*` allows any site, without cookies. Repeat `cors=` to add more. |
+| `output=json` | Prints the session as JSON lines instead of the banner and request table, for scripts and AI agents. See [JSON Output for Scripts and Agents](#json-output-for-scripts-and-agents). |
 
 `ssh ... proxy.tunnl.gg help` lists them. Invalid options end the session with an
 error. The options are visible to the server, and `auth=` is saved in your shell
 history like any command. A server can restrict which options anonymous clients may
-use (`Server.SetFreeLimits`); by default they may use all of them.
+use (`Server.SetFreeLimits`); by default they may use all of them. `output=` only changes
+what the client sees, so every client may use it.
+
+### JSON Output for Scripts and Agents
+
+`output=json` makes the session machine-readable: instead of the banner, QR code and
+request table, each event is one JSON object on a line of its own. Scripts, CI jobs and
+AI coding agents (Claude Code, Cursor, Codex and the like) can read the URL and watch
+requests without parsing terminal output. It works on every tunnel, with any user.
+
+Run it in the background with `-n -T` (no input, no terminal) and read the first line
+for the URL:
+
+```bash
+ssh -n -T -o ServerAliveInterval=30 -R 80:localhost:3000 stable@proxy.tunnl.gg output=json > tunnel.jsonl &
+until grep -q '"event":"tunnel"' tunnel.jsonl 2>/dev/null; do sleep 1; done
+head -1 tunnel.jsonl | jq -r .url
+```
+
+The first line describes the tunnel:
+
+```json
+{"event":"tunnel","url":"https://brave-fox-7c41e09b.tunnl.gg","subdomain":"brave-fox-7c41e09b","stable":true,"idle_timeout_seconds":7200,"max_lifetime_seconds":86400}
+```
+
+Then one line per request, and notices such as the warning before a time limit or the
+summary when the session ends:
+
+```json
+{"event":"request","time":"2026-10-09T08:14:03Z","method":"POST","path":"/webhooks/stripe","status":200,"bytes":2,"duration_ms":41,"visitor":"54.187.174.169"}
+{"event":"notice","message":"Stopped. 1 request, 2 B served."}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `event` | `tunnel` (first line), `request`, or `notice` |
+| `url`, `subdomain` | Where the tunnel is reachable |
+| `stable` | Whether the URL comes back on every reconnect (`stable@`, or an account's subdomain) |
+| `idle_timeout_seconds`, `max_lifetime_seconds` | When the server closes the tunnel; `0` means never |
+| `options` | Options in effect, like `host` or `auth` |
+| `warning` | Set when the server ignored part of the request, like a subdomain name without an account |
+| `status`, `bytes`, `duration_ms` | The app's response; left out when there was none |
+| `from_tunnl` | `true` when tunnl answered the request itself (rate limit, warning page, wrong password) rather than your app |
+| `detail` | Why a request failed, like the app not answering |
+
+Lines end in `\r\n`; JSON parsers treat the `\r` as whitespace. Errors in the command
+itself, like an unknown option, are still printed as text before the session ends.
 
 ### Choose a Subdomain (accounts)
 

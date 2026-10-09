@@ -1,6 +1,8 @@
 package tunnel
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -62,6 +64,7 @@ type RequestLogger struct {
 	done   chan struct{}
 	mu     sync.RWMutex // guards closed and sending on ch against close(ch)
 	closed bool
+	json   bool // one JSON object per line instead of a table, for scripts and agents
 
 	statsMu     sync.Mutex // guards the fields below
 	requests    int
@@ -81,6 +84,14 @@ func NewRequestLogger(w io.Writer, bufSize int) *RequestLogger {
 		notes: NewRateLimiter(tunnlNotesPerSecond, tunnlNotesPerSecond),
 	}
 	go l.drain()
+	return l
+}
+
+// NewJSONRequestLogger is NewRequestLogger for output=json: every entry and
+// notice is a JSON object on a line of its own.
+func NewJSONRequestLogger(w io.Writer, bufSize int) *RequestLogger {
+	l := NewRequestLogger(w, bufSize)
+	l.json = true
 	return l
 }
 
@@ -137,12 +148,70 @@ func (l *RequestLogger) Log(e Entry) {
 	}
 	l.statsMu.Unlock()
 
+	if l.json {
+		l.send(JSONLine(jsonEntry(e)))
+		return
+	}
 	l.send(formatEntry(e))
 }
 
 // Notice writes a message line to the log, such as a warning or a summary.
 func (l *RequestLogger) Notice(message string) {
+	if l.json {
+		l.send(JSONLine(map[string]string{"event": "notice", "message": message}))
+		return
+	}
 	l.send("\r" + strings.Repeat(" ", indentWidth) + colorYellow + sanitizeTerminalText(message) + colorReset + "\r\n")
+}
+
+// JSONLine encodes v as one line of output=json. Lines end in \r\n, which
+// JSON parsers read as whitespace, so they look right in a terminal too.
+// Control characters are escaped, so a value can't reach the terminal raw.
+func JSONLine(v any) string {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(b.String(), "\n") + "\r\n"
+}
+
+// requestJSON is a request log entry in output=json.
+type requestJSON struct {
+	Event      string `json:"event"` // "request"
+	Time       string `json:"time"`  // RFC 3339, UTC
+	Method     string `json:"method"`
+	Path       string `json:"path"`
+	Status     int    `json:"status,omitempty"`
+	Bytes      *int64 `json:"bytes,omitempty"`
+	DurationMS *int64 `json:"duration_ms,omitempty"`
+	Visitor    string `json:"visitor,omitempty"`
+	Note       string `json:"note,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+	FromTunnl  bool   `json:"from_tunnl,omitempty"` // handled by tunnl, not your app
+}
+
+func jsonEntry(e Entry) requestJSON {
+	r := requestJSON{
+		Event:     "request",
+		Time:      e.Time.UTC().Format(time.RFC3339),
+		Method:    e.Method,
+		Path:      e.Target,
+		Status:    e.Status,
+		Visitor:   e.Visitor,
+		Note:      e.Note,
+		Detail:    e.Detail,
+		FromTunnl: e.FromTunnl,
+	}
+	if e.Bytes >= 0 && e.Status > 0 && !e.FromTunnl {
+		r.Bytes = &e.Bytes
+	}
+	if e.Latency > 0 {
+		ms := e.Latency.Milliseconds()
+		r.DurationMS = &ms
+	}
+	return r
 }
 
 // Summary describes the traffic logged so far, e.g. "12 requests, 1 error, 3.4 KB served".

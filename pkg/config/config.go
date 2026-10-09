@@ -111,6 +111,11 @@ const (
 	OptionAuth  = "auth"  // HTTP basic authentication for visitors
 	OptionAllow = "allow" // visitor IP allowlist
 	OptionCORS  = "cors"  // CORS headers for browsers on other sites
+
+	// OptionOutput picks the session's output (output=json). It changes
+	// nothing for visitors, so every client may set it, and it isn't in
+	// AllOptions or Limits.Options.
+	OptionOutput = "output"
 )
 
 // AllOptions lists every option.

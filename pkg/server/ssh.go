@@ -300,9 +300,14 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	if acct != nil {
 		shown = acct.Subdomains[sub].With(opts)
 	}
-	fmt.Fprint(channel, sessionBanner(url, s.domain, urlNote(stable, acct, sub)+nameNote, limits, shown))
-
-	logger := tunnel.NewRequestLogger(channel, config.LogBufferSize)
+	var logger *tunnel.RequestLogger
+	if opts.JSON {
+		fmt.Fprint(channel, sessionJSON(url, sub, stable, strings.Trim(nameNote, " ()"), limits, shown))
+		logger = tunnel.NewJSONRequestLogger(channel, config.LogBufferSize)
+	} else {
+		fmt.Fprint(channel, sessionBanner(url, s.domain, urlNote(stable, acct, sub)+nameNote, limits, shown))
+		logger = tunnel.NewRequestLogger(channel, config.LogBufferSize)
+	}
 	tun.SetLogger(logger)
 	defer logger.CloseWithin(logFlushTimeout)
 
@@ -476,6 +481,32 @@ func readOptions(reqs <-chan *ssh.Request, limits config.Limits) (tunnel.Options
 }
 
 // urlNote explains in the session banner whether the URL stays the same.
+// sessionJSON is the banner for output=json: one line describing the tunnel,
+// for scripts and AI agents. Requests and notices follow as lines of their own.
+func sessionJSON(url, sub string, stable bool, warning string, limits config.Limits, opts tunnel.Options) string {
+	return tunnel.JSONLine(struct {
+		Event              string   `json:"event"` // "tunnel"
+		URL                string   `json:"url"`
+		Subdomain          string   `json:"subdomain"`
+		Stable             bool     `json:"stable"` // the same URL on every reconnect
+		IdleTimeoutSeconds int64    `json:"idle_timeout_seconds"`
+		MaxLifetimeSeconds int64    `json:"max_lifetime_seconds"` // 0: no limit
+		Options            []string `json:"options,omitempty"`
+		Warning            string   `json:"warning,omitempty"`
+		Upgrade            string   `json:"upgrade,omitempty"`
+	}{
+		Event:              "tunnel",
+		URL:                url,
+		Subdomain:          sub,
+		Stable:             stable,
+		IdleTimeoutSeconds: int64(limits.InactivityTimeout / time.Second),
+		MaxLifetimeSeconds: int64(limits.MaxLifetime / time.Second),
+		Options:            opts.Names(),
+		Warning:            warning,
+		Upgrade:            limits.UpgradeNote,
+	})
+}
+
 func urlNote(stable bool, acct *Account, sub string) string {
 	_, reserved := acct.reserved(sub)
 	switch {

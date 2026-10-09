@@ -25,6 +25,9 @@ type Options struct {
 	// CORS lets pages on these origins call the tunnel from a browser: "*"
 	// for any, without credentials, or origins like https://app.example.com
 	CORS []string
+	// JSON asks for the session's output as JSON lines (output=json), for
+	// scripts and AI agents. It only changes what the client sees.
+	JSON bool
 }
 
 // BasicAuth is a user name and password visitors must send with HTTP basic
@@ -62,6 +65,7 @@ const OptionsUsage = `Options go after the host, as name=value:
   cors=*                 let pages on any site call it from a browser
   cors=https://app.example.com
                          only pages on these sites, with cookies
+  output=json            print the URL and each request as JSON lines, for scripts and agents
 For example: ssh -t -R 80:localhost:8080 proxy.tunnl.gg host=localhost auth=me:secret`
 
 // ErrHelp is returned by ParseOptions for "help".
@@ -110,6 +114,14 @@ func ParseOptions(command string) (Options, error) {
 			}
 			if len(opts.Allow) > maxAllowEntries {
 				return Options{}, fmt.Errorf("allow= takes at most %d entries", maxAllowEntries)
+			}
+		case config.OptionOutput:
+			switch strings.ToLower(value) {
+			case "json":
+				opts.JSON = true
+			case "text":
+			default:
+				return Options{}, fmt.Errorf("output=%s isn't an output: use output=json or output=text", value)
 			}
 		case config.OptionCORS:
 			for _, origin := range strings.Split(value, ",") {
@@ -180,6 +192,9 @@ func (o Options) With(override Options) Options {
 	}
 	if len(override.CORS) > 0 {
 		o.CORS = override.CORS
+	}
+	if override.JSON {
+		o.JSON = true
 	}
 	return o
 }

@@ -56,6 +56,28 @@ func TestParseOptions(t *testing.T) {
 	}
 }
 
+func TestParseOptions_Output(t *testing.T) {
+	for cmd, want := range map[string]bool{"output=json": true, "OUTPUT=JSON": true, "output=text": false, "": false} {
+		opts, err := ParseOptions(cmd)
+		if err != nil || opts.JSON != want {
+			t.Errorf("ParseOptions(%q) = JSON %v, %v; want %v", cmd, opts.JSON, err, want)
+		}
+	}
+	// It changes nothing for visitors, so no plan has to allow it
+	opts, _ := ParseOptions("output=json host=localhost")
+	if got := strings.Join(opts.Names(), ","); got != "host" {
+		t.Errorf("Names() = %s, want output left out", got)
+	}
+	if !(Options{}).With(opts).JSON {
+		t.Error("With() dropped JSON")
+	}
+	for _, bad := range []string{"output=xml", "output=json output=text"} {
+		if _, err := ParseOptions(bad); err == nil {
+			t.Errorf("ParseOptions(%q) should fail", bad)
+		}
+	}
+}
+
 func TestOptionsAllows(t *testing.T) {
 	opts, _ := ParseOptions("allow=203.0.113.7,198.51.100.0/24,2001:db8::/32")
 	for addr, want := range map[string]bool{

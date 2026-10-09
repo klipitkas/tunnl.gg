@@ -154,8 +154,7 @@ func openTunnelAt(t *testing.T, srv *Server, addr string, clientConfig *ssh.Clie
 	if err != nil {
 		t.Fatalf("StdoutPipe() error: %v", err)
 	}
-	// Keep stdin open like an interactive `ssh -t`; the server treats EOF on
-	// stdin as the user disconnecting.
+	// Keep stdin open like an interactive `ssh -t`, so tests can send Ctrl+C
 	stdin, err := session.StdinPipe()
 	if err != nil {
 		t.Fatalf("StdinPipe() error: %v", err)
