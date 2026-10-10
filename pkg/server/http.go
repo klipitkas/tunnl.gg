@@ -233,6 +233,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					resp.Header.Set(name, value)
 				}
 			}
+			resp.Header.Set(robotsHeader, robotsNoIndex)
 			setCORS(resp.Header, corsAllow, corsCredentials)
 
 			// Enforce response body size limit
@@ -540,7 +541,16 @@ var securityHeaders = map[string]string{
 	"X-Content-Type-Options": "nosniff",
 	"X-Frame-Options":        "DENY",
 	"Referrer-Policy":        "strict-origin-when-cross-origin",
+	robotsHeader:             robotsNoIndex,
 }
+
+// Tunnels are someone's computer for a while, not websites: search engines
+// mustn't index them, which would also make phishing pages findable. Every
+// response says so, the app's included, whatever the app sends.
+const (
+	robotsHeader  = "X-Robots-Tag"
+	robotsNoIndex = "noindex, nofollow"
+)
 
 // proxiedDefaultHeaders are added to proxied responses only when the tunneled
 // app doesn't set them. Framing is left to the app, so it can be embedded.

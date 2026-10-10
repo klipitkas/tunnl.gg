@@ -52,6 +52,11 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 | Block duration | 1 hour | Temporary IP block after abuse |
 | Violations before block | 10 | SSH connection rate violations before IP block |
 
+Tunnels aren't indexed by search engines: every response from a tunnel, the app's and
+tunnl's own, carries `X-Robots-Tag: noindex, nofollow`, whatever the app sends. A tunnel is
+someone's machine for a while, not a website, and indexing it would also make phishing
+pages easy to find.
+
 ## Project Structure
 
 ```text
