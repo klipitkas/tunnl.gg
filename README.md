@@ -2,135 +2,290 @@
   <a href="https://tunnl.gg"><img src="https://tunnl.gg/github-banner.png" alt="tunnl.gg: your localhost, public in one command" width="100%"></a>
 </p>
 
-# Tunnl.gg
+<p align="center">
+  <a href="https://github.com/klipitkas/tunnl.gg/actions/workflows/ci.yml"><img src="https://github.com/klipitkas/tunnl.gg/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
+</p>
 
-A minimal SSH tunneling service. Expose your local apps to the internet with a single command.
+# tunnl.gg
+
+Expose a local web server to the internet with one SSH command. Nothing to install, no
+account: you get a public HTTPS URL, and with `stable@` the same URL every time.
 
 ```bash
 ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 ```
 
-> **Note:** The `-t` flag is required to allocate a TTY, which allows the server to display your tunnel URL.
+This repository is the open-source (MIT) server behind [tunnl.gg](https://tunnl.gg). Use
+the hosted service for free, or run your own.
+
+**[Website](https://tunnl.gg)** · **[Docs](https://tunnl.gg/docs)** · **[Guides](https://tunnl.gg/guides)**
+
+## Contents
+
+- **Using tunnl.gg**
+  - [Features](#features)
+  - [Quick start](#quick-start)
+  - [Keep the same URL](#keep-the-same-url)
+  - [Options](#options)
+  - [JSON output for scripts and agents](#json-output-for-scripts-and-agents)
+  - [Recipes](#recipes)
+  - [Limits and protection](#limits-and-protection)
+- **Running your own server**
+  - [How it works](#how-it-works)
+  - [Before you start](#before-you-start)
+  - [Install with Docker](#install-with-docker)
+  - [Install with systemd](#install-with-systemd)
+  - [Configuration](#configuration)
+  - [Behind a proxy](#behind-a-proxy)
+  - [Stats endpoint](#stats-endpoint)
+  - [Troubleshooting](#troubleshooting)
+- **Contributing**
+  - [Local development](#local-development)
+  - [Make commands](#make-commands)
+  - [Project structure](#project-structure)
+- [License](#license)
+
+# Using tunnl.gg
 
 ## Features
 
-- Memorable subdomain per connection (e.g., `https://happy-tiger-a1b2c3d4.tunnl.gg`)
-- QR code of the URL in the terminal, for opening the tunnel on a phone
-- Live, colored request log in your terminal: path and query, status, size, timing, and visitor, with plain-words explanations when a request fails
-- Optional stable URL tied to your SSH key (`stable@`), no account needed
-- Options in the `ssh` command: password protection, IP allowlists, and a Host header rewrite for dev servers that block unknown hosts
-- HTTPS for every tunnel with a wildcard certificate you provide (e.g. from Let's Encrypt)
-- WebSocket support
-- Comprehensive rate limiting and abuse protection
-- Phishing protection via interstitial warning page
-- Built-in stats/metrics endpoint
-- No authentication required
-- Zero configuration for clients
+- **One command, nothing to install:** uses the SSH client already on macOS, Linux and
+  Windows 10+. No account, no auth token.
+- **HTTPS and WebSockets** on a subdomain like `https://happy-tiger-a1b2c3d4.tunnl.gg`.
+- **Stable URLs:** connect as `stable@` and your SSH key gets the same URL every time.
+- **A live view in your terminal:** the URL, a QR code for phones, and a colored log of
+  every request (path, status, size, timing, visitor), with plain-words explanations when
+  one fails.
+- **Options in the command:** Host header rewrite for dev servers, passwords, IP
+  allowlists, CORS, and JSON output for scripts and AI agents.
+- **Safe by default:** rate limits, abuse protection, a phishing warning page for
+  browsers, and tunnels kept out of search engines.
 
-### Limits & Protection
+## Quick start
+
+```bash
+# Expose the app on port 8080
+ssh -t -R 80:localhost:8080 proxy.tunnl.gg
+```
+
+tunnl prints the public URL and a QR code, then logs requests as they arrive. Press
+Ctrl+C to stop. The `-t` flag gives the session a terminal, which the server needs to show
+the URL (for scripts, see [JSON output](#json-output-for-scripts-and-agents)).
+
+## Keep the same URL
+
+Each connection gets a new random URL. Connect as `stable` instead, and the URL is tied to
+your SSH key and stays the same every time you reconnect:
+
+```bash
+ssh -t -R 80:localhost:8080 stable@proxy.tunnl.gg
+```
+
+- Any SSH key works; there's nothing to register. Without one, `stable@` is refused:
+  create one with `ssh-keygen -t ed25519`.
+- Each key has one live tunnel. Reconnecting with the same key (say, after your laptop
+  slept) replaces the old connection, so two machines need two keys.
+- The URL can't be worked out from your public key, but it changes if the server's host
+  key changes.
+
+## Options
+
+Add options after the host, as `name=value`:
+
+```bash
+ssh -t -R 80:localhost:5173 proxy.tunnl.gg host=localhost auth=me:secret allow=203.0.113.7
+```
+
+| Option | What it does |
+|--------|--------------|
+| `host=localhost:3000` | Sends this `Host` header to your app instead of the public one. Fixes "Blocked request" from Vite, Django's `ALLOWED_HOSTS`, Rails and webpack-dev-server without changing their config. `X-Forwarded-Host` still carries the public host. |
+| `auth=user:password` | Visitors must sign in with HTTP basic authentication. The password isn't passed on to your app. Each visitor gets 10 wrong passwords, then one every 10 seconds. |
+| `allow=203.0.113.7,198.51.100.0/24` | Only visitors from these IPs or networks get through; others get 403. Repeat to add more. |
+| `cors=https://app.example.com` | Lets pages on these sites call the tunnel from a browser, with cookies. tunnl answers CORS preflights, even on a password-protected tunnel, and adds the headers unless the app sets its own. `cors=*` allows any site, without cookies. Repeat to add more. |
+| `output=json` | Prints JSON lines instead of the banner and request table. See [JSON output](#json-output-for-scripts-and-agents). |
+
+`ssh ... proxy.tunnl.gg help` lists them. An invalid option ends the session with an error.
+Options are visible to the server, and `auth=` ends up in your shell history like any
+command. A server can restrict which options anonymous clients may use
+(`Server.SetFreeLimits`; all are allowed by default). `output=` only changes what the
+client sees, so every client may use it.
+
+## JSON output for scripts and agents
+
+With `output=json`, the session prints one JSON object per line instead of the banner, QR
+code and table. Scripts, CI jobs and AI coding agents (Claude Code, Cursor, Codex) can read
+the URL and watch requests without parsing terminal output. It works on every tunnel.
+
+Run it in the background with `-n -T` (no input, no terminal) and read the URL from the
+first line:
+
+```bash
+ssh -n -T -o ServerAliveInterval=30 -R 80:localhost:3000 stable@proxy.tunnl.gg output=json > tunnel.jsonl &
+until grep -q '"event":"tunnel"' tunnel.jsonl 2>/dev/null; do sleep 1; done
+head -1 tunnel.jsonl | jq -r .url
+```
+
+The first line describes the tunnel; then come one line per request, and notices such as
+the warning before a time limit or the summary when tunnl closes the tunnel:
+
+```json
+{"event":"tunnel","url":"https://brave-fox-7c41e09b.tunnl.gg","subdomain":"brave-fox-7c41e09b","stable":true,"idle_timeout_seconds":7200,"max_lifetime_seconds":86400}
+{"event":"request","time":"2026-10-09T08:14:03Z","method":"POST","path":"/webhooks/stripe","status":200,"bytes":2,"duration_ms":41,"visitor":"54.187.174.169"}
+{"event":"notice","message":"Stopped. 1 request, 2 B served."}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `event` | `tunnel` (first line), `request`, or `notice` |
+| `url`, `subdomain` | Where the tunnel is reachable |
+| `stable` | Whether the URL comes back on every reconnect (`stable@`, or an account's subdomain) |
+| `idle_timeout_seconds`, `max_lifetime_seconds` | When the server closes the tunnel; `0` means never |
+| `options` | Options in effect, like `host` or `auth` |
+| `warning` | Set when the server ignored part of the request, like a subdomain name without an account |
+| `status`, `bytes`, `duration_ms` | The app's response; left out when there was none |
+| `from_tunnl` | `true` when tunnl answered the request itself (rate limit, warning page, wrong password) |
+| `detail` | Why a request failed, like the app not answering |
+
+Lines end in `\r\n`, which JSON parsers read as whitespace. Errors in the command itself,
+like an unknown option, are printed as text before the session ends. The
+[guide for AI coding agents](https://tunnl.gg/guides/ai-coding-agents) has instructions to
+paste into `AGENTS.md` or `CLAUDE.md`.
+
+## Recipes
+
+**Expose another machine on your network:**
+
+```bash
+ssh -t -R 80:192.168.1.100:3000 proxy.tunnl.gg
+```
+
+**Reconnect automatically,** keeping the same URL through Wi-Fi drops and time limits:
+
+```bash
+while true; do
+  ssh -t -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes \
+    -R 80:localhost:8080 stable@proxy.tunnl.gg
+  sleep 5
+done
+```
+
+To run it as a background service with launchd or systemd, see
+[Keep a tunnel running](https://tunnl.gg/guides/keep-a-tunnel-running).
+
+**Skip the warning page** that browsers see once a day, for your own tools and tests:
+
+```bash
+curl -H "tunnl-skip-browser-warning: 1" https://happy-tiger-a1b2c3d4.tunnl.gg
+```
+
+Webhooks, `curl` and other non-browser clients never see it.
+
+**Choose a subdomain (deployments with accounts):** with `Server.SetAccounts`, an account's
+key connects as `pro@` and gets its default subdomain. To open another of the account's
+subdomains, name it as the bind address; each command is one tunnel:
+
+```bash
+ssh -t -R myapp:80:localhost:3000 pro@proxy.tunnl.gg
+ssh -t -R api:80:localhost:8000 pro@proxy.tunnl.gg
+```
+
+A name the account doesn't have ends the session with an error. Anonymous clients keep
+their random or stable URL; a name they give is ignored, and the banner says so.
+
+## Limits and protection
 
 | Limit | Value | Description |
 |-------|-------|-------------|
-| Tunnels per IP | 3 | Max concurrent tunnels per IP address |
-| Total tunnels | 1000 | Server-wide tunnel limit |
+| Tunnels per IP | 3 | Concurrent tunnels per IP address |
+| Total tunnels | 1000 | Server-wide |
+| Inactivity timeout | 2 hours | A tunnel closes after 2 hours with no requests or open WebSockets |
+| Max tunnel lifetime | 24 hours | Absolute limit |
 | Requests per visitor | 25/s (burst 200) | Per visitor IP (IPv6 by /64), per tunnel; excess gets 429 |
 | Requests per tunnel | 50/s (burst 400) | Across all visitors; excess gets 429 |
-| Request body size | 128 MB | Max upload size |
-| Response body size | 128 MB | Max response size |
 | In-flight requests | 256 per visitor, 512 per tunnel | Concurrent proxied requests; excess gets 429 (visitor) or 503 (tunnel) |
-| Request idle timeout | 2 minutes | Proxied requests are canceled after 2 minutes without data in either direction; long polls and streams can run longer while data flows |
-| WebSocket transfer | 1 GB per direction | Max data per WebSocket connection |
-| WebSocket idle timeout | 2 hours | WebSocket closed after inactivity |
-| WebSockets per tunnel | 100 | Max concurrent WebSockets per tunnel |
-| WebSockets per visitor | 20 | Max concurrent WebSockets per visitor IP across all tunnels |
-| SSH handshake timeout | 30 seconds | Max time for SSH handshake to complete |
-| Concurrent handshakes | 3 per IP, 100 total | In-progress SSH handshakes; excess connections are dropped |
-| Unanswered channel opens | 32 per tunnel | Connections the SSH client hasn't accepted yet; further requests wait up to 10 seconds for one |
-| Connections per minute | 10 | New SSH connections per IP |
-| Inactivity timeout | 2 hours | Tunnel closes after 2 hours with no requests or open WebSockets |
-| Max tunnel lifetime | 24 hours | Absolute tunnel lifetime limit |
-| Block duration | 1 hour | Temporary IP block after abuse |
-| Violations before block | 10 | SSH connection rate violations before IP block |
+| Request and response bodies | 128 MB each | |
+| Request idle timeout | 2 minutes | A proxied request is canceled after 2 minutes without data either way; long polls and streams can run longer while data flows |
+| WebSockets | 100 per tunnel, 20 per visitor IP | Concurrent connections |
+| WebSocket transfer | 1 GB per direction | Per connection |
+| WebSocket idle timeout | 2 hours | |
+| SSH connections | 10 per minute per IP | New connections |
+| SSH handshakes | 3 per IP, 100 total; 30 second timeout | In progress at once; excess connections are dropped |
+| Unanswered channel opens | 32 per tunnel | Connections the SSH client hasn't accepted yet; further requests wait up to 10 seconds |
+| Abuse blocks | 1 hour, after 10 violations | Temporary IP block after repeated SSH rate limit violations |
 
-Tunnels aren't indexed by search engines: every response from a tunnel, the app's and
-tunnl's own, carries `X-Robots-Tag: noindex, nofollow`, whatever the app sends. A tunnel is
-someone's machine for a while, not a website, and indexing it would also make phishing
-pages easy to find.
+Browsers see a warning page before reaching a tunnel (once a day), to protect them from
+phishing. Every response from a tunnel, the app's and tunnl's own, carries
+`X-Robots-Tag: noindex, nofollow` whatever the app sends: a tunnel is someone's machine for
+a while, not a website, and indexing it would make phishing pages easy to find.
 
-## Project Structure
+# Running your own server
+
+## How it works
 
 ```text
-tunnl.gg/
-├── cmd/tunnl/              # Application entry point
-├── pkg/
-│   ├── clientip/           # Visitor IP resolution behind trusted proxies
-│   │   └── clientip.go
-│   ├── config/             # Configuration and constants
-│   │   └── config.go
-│   ├── serve/              # Server startup, shared with hosted builds
-│   │   └── serve.go
-│   ├── server/             # Server implementation
-│   │   ├── server.go       # Server struct, tunnel registry
-│   │   ├── accounts.go     # Optional accounts for hosted deployments
-│   │   ├── ssh.go          # SSH connection handling
-│   │   ├── http.go         # HTTP/HTTPS handlers
-│   │   ├── stats.go        # Stats tracking and endpoint
-│   │   ├── abuse.go        # Abuse tracking and IP blocking
-│   │   ├── connlimit.go    # Concurrent connection limits
-│   │   └── deadlines.go    # Idle timeouts for proxied requests
-│   ├── subdomain/          # Subdomain generation/validation
-│   │   └── subdomain.go
-│   └── tunnel/             # Tunnel, SSH channels, and rate limiter
-│       ├── tunnel.go
-│       ├── channel.go
-│       ├── ratelimiter.go
-│       └── requestlogger.go
-├── .golangci.yml           # Linter configuration
-├── Dockerfile              # Multi-stage build (scratch image)
-├── docker-compose.yml      # Production deployment
-└── Makefile                # Build commands
+         ssh -R 80:localhost:8080          https://happy-tiger-a1b2c3d4.yourdomain.com
+   ┌─────────────┐                            ┌─────────┐
+   │ Your laptop │                            │ Browser │
+   │  app :8080  │                            └────┬────┘
+   └──────┬──────┘                                 │
+          │ SSH (:22)                              │ HTTPS (:443)
+          ▼                                        ▼
+   ┌────────────────────────────────────────────────────────┐
+   │                      tunnl server                      │
+   │   SSH :22  ──►  tunnel registry  ◄──  HTTPS :443       │
+   │                 subdomain → tunnel                     │
+   │   HTTP :80 redirects to HTTPS · stats on 127.0.0.1:9090│
+   └────────────────────────────────────────────────────────┘
 ```
 
-## Quick Start with Docker
+1. The client runs `ssh -t -R 80:localhost:8080 proxy.yourdomain.com`.
+2. The server picks a subdomain (random, or derived from the key for `stable@`) and prints
+   the URL.
+3. A browser requests `https://happy-tiger-a1b2c3d4.yourdomain.com`.
+4. The server finds the tunnel and sends the request through the SSH connection.
+5. The SSH client passes it to `localhost:8080` and the response travels back.
 
-### Prerequisites
+## Before you start
 
-- Docker and Docker Compose
-- A domain with DNS pointing to your server
-- SSL certificates (see below)
+- **A server** with ports 22, 80 and 443 free. tunnl takes port 22, so move your own SSH
+  first (below).
+- **A domain** with both records pointing at the server:
 
-### 1. DNS Configuration
+  ```text
+  A    yourdomain.com      → YOUR_SERVER_IP
+  A    *.yourdomain.com    → YOUR_SERVER_IP
+  ```
 
-```text
-A    yourdomain.com      → YOUR_SERVER_IP
-A    *.yourdomain.com    → YOUR_SERVER_IP
-```
+- **A wildcard TLS certificate** for `yourdomain.com` and `*.yourdomain.com`. tunnl doesn't
+  obtain certificates itself. Wildcards need a DNS challenge, for example with certbot:
 
-### 2. Obtain SSL Certificates
+  ```bash
+  sudo apt install certbot
+  sudo certbot certonly --manual --preferred-challenges dns \
+    -d yourdomain.com -d '*.yourdomain.com'
+  ```
+
+  `--manual` certificates don't renew on their own; a certbot DNS plugin for your DNS
+  provider (such as `python3-certbot-dns-cloudflare`) renews them automatically.
+
+- **Move your server's own SSH** off port 22. Test the new port before closing your
+  session:
+
+  ```bash
+  sudo nano /etc/ssh/sshd_config   # change: Port 22 → Port 2222
+  sudo ufw allow 2222/tcp
+  sudo systemctl restart sshd
+  ssh -p 2222 user@your-server     # in a new terminal
+  ```
+
+## Install with Docker
 
 ```bash
-# Install certbot
-sudo apt install certbot
-
-# Get wildcard certificate (requires DNS challenge)
-sudo certbot certonly --manual --preferred-challenges dns \
-  -d yourdomain.com -d '*.yourdomain.com'
-
-# Or use HTTP challenge for single domain first
-sudo certbot certonly --standalone -d yourdomain.com
-```
-
-### 3. Deploy
-
-```bash
-# Clone the repository
 git clone https://github.com/klipitkas/tunnl.gg.git
 cd tunnl.gg
 
-# Create data directories
 mkdir -p data/certs data/hostkey
-
-# Copy certificates
 sudo cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem data/certs/
 sudo cp /etc/letsencrypt/live/yourdomain.com/privkey.pem data/certs/
 
@@ -138,51 +293,26 @@ sudo cp /etc/letsencrypt/live/yourdomain.com/privkey.pem data/certs/
 # store the SSH host key it generates on first start
 sudo chown -R 65534:65534 data/certs data/hostkey
 
-# Start the service
 docker compose up -d
-
-# View logs
 docker compose logs -f
 ```
 
-### 4. Move Server SSH (Important!)
+Set `DOMAIN` in `docker-compose.yml` to your domain first. After renewing the certificate, copy
+the new files into `data/certs/` and run `docker compose restart`. `docker compose up
+tunnl-dev` starts a second instance on other ports for staging.
 
-Your server's SSH likely uses port 22. Move it so tunnl can use it:
+## Install with systemd
 
-```bash
-sudo nano /etc/ssh/sshd_config
-# Change: Port 22 → Port 2222
-
-sudo ufw allow 2222/tcp
-sudo systemctl restart sshd
-```
-
-**Test the new port before closing your session:**
+Build the binary (Go 1.26.8+):
 
 ```bash
-ssh -p 2222 user@your-server
-```
-
-## Manual Installation
-
-### Build from Source
-
-```bash
-# Requires Go 1.26.8+
 git clone https://github.com/klipitkas/tunnl.gg.git
 cd tunnl.gg
-
-# Build optimized binary (~6MB)
-make build-small
-
-# Or build for all platforms
-make build-all
+make build-small   # ~6 MB; make build-all cross-compiles for Linux and macOS
 ```
 
-### Systemd Service
-
-Run the service as a dedicated unprivileged user. It only needs the
-`CAP_NET_BIND_SERVICE` capability to bind ports 22, 80, and 443.
+Run it as an unprivileged user. It only needs `CAP_NET_BIND_SERVICE` to bind ports 22, 80
+and 443:
 
 ```bash
 # Service user, binary (root-owned so the service can't replace it),
@@ -193,8 +323,8 @@ sudo install -m 0755 bin/tunnl /opt/tunnl/tunnl
 sudo install -d -o root -g tunnl -m 0750 /etc/tunnl
 ```
 
-Let's Encrypt keys are only readable by root, so copy them for the service
-with a certbot deploy hook, which also runs after every renewal:
+Let's Encrypt keys are readable by root only, so copy them for the service with a certbot
+deploy hook, which also runs after every renewal:
 
 ```bash
 sudo tee /etc/letsencrypt/renewal-hooks/deploy/tunnl.sh > /dev/null <<'HOOK'
@@ -209,9 +339,7 @@ sudo chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/tunnl.sh
 sudo /etc/letsencrypt/renewal-hooks/deploy/tunnl.sh
 ```
 
-```bash
-sudo nano /etc/systemd/system/tunnl.service
-```
+Save this as `/etc/systemd/system/tunnl.service`:
 
 ```ini
 [Unit]
@@ -238,7 +366,7 @@ Environment=HOST_KEY_PATH=/var/lib/tunnl/host_key
 Environment=TLS_CERT=/etc/tunnl/fullchain.pem
 Environment=TLS_KEY=/etc/tunnl/privkey.pem
 Environment=DOMAIN=yourdomain.com
-# Only when behind a proxy, see "Behind a Proxy"
+# Only when behind a proxy, see "Behind a proxy"
 #Environment=TRUSTED_PROXIES=cloudflare
 
 # Bind privileged ports without running as root
@@ -270,154 +398,34 @@ sudo systemctl enable --now tunnl
 
 ## Configuration
 
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `SSH_ADDR` | `:22` | SSH server listen address |
-| `HTTP_ADDR` | `:80` | HTTP server listen address |
-| `HTTPS_ADDR` | `:443` | HTTPS server listen address |
-| `STATS_ADDR` | `127.0.0.1:9090` | Stats endpoint (localhost only) |
-| `HOST_KEY_PATH` | `host_key` | Path to SSH host key |
-| `TLS_CERT` | `/etc/letsencrypt/live/tunnl.gg/fullchain.pem` | TLS certificate path |
-| `TLS_KEY` | `/etc/letsencrypt/live/tunnl.gg/privkey.pem` | TLS private key path |
-| `DOMAIN` | `tunnl.gg` | Domain name for the service |
-| `TRUSTED_PROXIES` | unset | Proxies whose headers identify visitors: CIDRs/IPs (`X-Forwarded-For`) and/or `cloudflare` (`CF-Connecting-IP`). See [Behind a Proxy](#behind-a-proxy) |
+All settings are environment variables:
 
-## Usage
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOMAIN` | `tunnl.gg` | The domain tunnels are served under |
+| `SSH_ADDR` | `:22` | SSH listen address |
+| `HTTP_ADDR` | `:80` | HTTP listen address (redirects to HTTPS) |
+| `HTTPS_ADDR` | `:443` | HTTPS listen address |
+| `STATS_ADDR` | `127.0.0.1:9090` | [Stats endpoint](#stats-endpoint); keep it on localhost |
+| `HOST_KEY_PATH` | `host_key` | SSH host key, generated on first start. Keep it: stable URLs and clients' known_hosts depend on it |
+| `TLS_CERT` | `/etc/letsencrypt/live/tunnl.gg/fullchain.pem` | TLS certificate |
+| `TLS_KEY` | `/etc/letsencrypt/live/tunnl.gg/privkey.pem` | TLS private key |
+| `TRUSTED_PROXIES` | unset | Proxies whose headers identify visitors. See [Behind a proxy](#behind-a-proxy) |
 
-### Basic
-
-```bash
-# Expose local port 8080
-ssh -t -R 80:localhost:8080 proxy.tunnl.gg
-```
-
-### Keep the Same URL
-
-By default each connection gets a new random URL. Connect as `stable` to get a URL
-tied to your SSH key instead, which stays the same every time you reconnect:
+To run a second instance on the same machine, give it other ports and its own host key:
 
 ```bash
-ssh -t -R 80:localhost:8080 stable@proxy.tunnl.gg
+SSH_ADDR=:2223 HTTP_ADDR=:8080 HTTPS_ADDR=:8443 STATS_ADDR=127.0.0.1:9091 \
+HOST_KEY_PATH=./host_key_dev ./tunnl
 ```
 
-- Any SSH key works; there's nothing to register. Without one, `stable@` is refused
-  (create a key with `ssh-keygen -t ed25519`).
-- Reconnecting with the same key while an old connection is still up (for example
-  after your laptop slept) replaces the old connection.
-- The URL can't be worked out from your public key, but changes if the server's host
-  key changes.
+## Behind a proxy
 
-### Options
-
-Add options after the host, as `name=value`:
-
-```bash
-ssh -t -R 80:localhost:5173 proxy.tunnl.gg host=localhost auth=me:secret allow=203.0.113.7
-```
-
-| Option | What it does |
-|--------|--------------|
-| `host=localhost:3000` | Sends this `Host` header to your app instead of the public one. Vite, Django's `ALLOWED_HOSTS`, Rails and webpack-dev-server reject unknown hosts ("Blocked request"); this fixes it without changing their config. `X-Forwarded-Host` still carries the public host. |
-| `auth=user:password` | Visitors must sign in with HTTP basic authentication. The password isn't passed on to your app. Each visitor gets 10 wrong passwords, then one every 10 seconds. |
-| `allow=203.0.113.7,198.51.100.0/24` | Only visitors from these IPs or networks get through; others get 403. Repeat `allow=` to add more. |
-| `cors=https://app.example.com` | Lets pages on these sites call the tunnel from a browser, with cookies: tunnl answers CORS preflights, even on a password-protected tunnel, and adds the headers to responses unless the app sets its own. `cors=*` allows any site, without cookies. Repeat `cors=` to add more. |
-| `output=json` | Prints the session as JSON lines instead of the banner and request table, for scripts and AI agents. See [JSON Output for Scripts and Agents](#json-output-for-scripts-and-agents). |
-
-`ssh ... proxy.tunnl.gg help` lists them. Invalid options end the session with an
-error. The options are visible to the server, and `auth=` is saved in your shell
-history like any command. A server can restrict which options anonymous clients may
-use (`Server.SetFreeLimits`); by default they may use all of them. `output=` only changes
-what the client sees, so every client may use it.
-
-### JSON Output for Scripts and Agents
-
-`output=json` makes the session machine-readable: instead of the banner, QR code and
-request table, each event is one JSON object on a line of its own. Scripts, CI jobs and
-AI coding agents (Claude Code, Cursor, Codex and the like) can read the URL and watch
-requests without parsing terminal output. It works on every tunnel, with any user.
-
-Run it in the background with `-n -T` (no input, no terminal) and read the first line
-for the URL:
-
-```bash
-ssh -n -T -o ServerAliveInterval=30 -R 80:localhost:3000 stable@proxy.tunnl.gg output=json > tunnel.jsonl &
-until grep -q '"event":"tunnel"' tunnel.jsonl 2>/dev/null; do sleep 1; done
-head -1 tunnel.jsonl | jq -r .url
-```
-
-The first line describes the tunnel:
-
-```json
-{"event":"tunnel","url":"https://brave-fox-7c41e09b.tunnl.gg","subdomain":"brave-fox-7c41e09b","stable":true,"idle_timeout_seconds":7200,"max_lifetime_seconds":86400}
-```
-
-Then one line per request, and notices such as the warning before a time limit or the
-summary when the session ends:
-
-```json
-{"event":"request","time":"2026-10-09T08:14:03Z","method":"POST","path":"/webhooks/stripe","status":200,"bytes":2,"duration_ms":41,"visitor":"54.187.174.169"}
-{"event":"notice","message":"Stopped. 1 request, 2 B served."}
-```
-
-| Field | Meaning |
-|-------|---------|
-| `event` | `tunnel` (first line), `request`, or `notice` |
-| `url`, `subdomain` | Where the tunnel is reachable |
-| `stable` | Whether the URL comes back on every reconnect (`stable@`, or an account's subdomain) |
-| `idle_timeout_seconds`, `max_lifetime_seconds` | When the server closes the tunnel; `0` means never |
-| `options` | Options in effect, like `host` or `auth` |
-| `warning` | Set when the server ignored part of the request, like a subdomain name without an account |
-| `status`, `bytes`, `duration_ms` | The app's response; left out when there was none |
-| `from_tunnl` | `true` when tunnl answered the request itself (rate limit, warning page, wrong password) rather than your app |
-| `detail` | Why a request failed, like the app not answering |
-
-Lines end in `\r\n`; JSON parsers treat the `\r` as whitespace. Errors in the command
-itself, like an unknown option, are still printed as text before the session ends.
-
-### Choose a Subdomain (accounts)
-
-On a deployment with accounts (`Server.SetAccounts`), an account's key connects as
-`pro@` and gets the account's default subdomain for that key. To open another of the
-account's subdomains, name it as the bind address; each connection is one tunnel, so
-several commands run several subdomains at once:
-
-```bash
-ssh -t -R myapp:80:localhost:3000 pro@proxy.tunnl.gg
-ssh -t -R api:80:localhost:8000 pro@proxy.tunnl.gg
-```
-
-A name the account doesn't have ends the session with an error. Anonymous clients keep
-their random or stable URL; a name they give is ignored, and the banner says so.
-
-### Expose a Different Host
-
-```bash
-ssh -t -R 80:192.168.1.100:3000 proxy.tunnl.gg
-```
-
-### Keep Connection Alive
-
-```bash
-ssh -t -R 80:localhost:8080 -o ServerAliveInterval=60 proxy.tunnl.gg
-```
-
-### Bypass Interstitial Warning
-
-Browser requests show a phishing warning (cookie-based, lasts 1 day). To skip programmatically:
-
-```bash
-curl -H "tunnl-skip-browser-warning: 1" https://happy-tiger-a1b2c3d4.tunnl.gg
-```
-
-### Behind a Proxy
-
-Rate limits, WebSocket limits, and the `X-Forwarded-For` header sent to tunneled apps
-all use the visitor's IP address. By default the server trusts no proxies and uses the
-address of the TCP connection, which is right when it faces the internet directly
-(including most on-prem setups).
-
-When HTTPS traffic reaches the server through proxies, list them in `TRUSTED_PROXIES`
-so the visitor's address is taken from their headers:
+Rate limits, WebSocket limits and the `X-Forwarded-For` header sent to apps all use the
+visitor's IP address. By default the server trusts no proxies and uses the TCP
+connection's address, which is right when it faces the internet directly (including most
+on-prem setups). When HTTPS traffic arrives through proxies, list them in
+`TRUSTED_PROXIES`:
 
 | Setup | `TRUSTED_PROXIES` |
 |-------|-------------------|
@@ -426,25 +434,20 @@ so the visitor's address is taken from their headers:
 | Behind your own reverse proxy or load balancer | its IPs or CIDRs, e.g. `10.0.0.0/8` |
 | Your proxy behind Cloudflare | `cloudflare,10.0.0.0/8` |
 
-`cloudflare` trusts `CF-Connecting-IP` only from Cloudflare's published ranges
-([cloudflare.com/ips](https://www.cloudflare.com/ips/), built in). Other entries trust
+`cloudflare` trusts `CF-Connecting-IP` only from Cloudflare's published ranges (built in,
+from [cloudflare.com/ips](https://www.cloudflare.com/ips/)). Other entries trust
 `X-Forwarded-For`, read right to left past trusted proxies, so addresses a visitor adds
-themselves are ignored. Headers from any other address are ignored, so only list proxies
-you control, and firewall ports 80 and 443 so only those proxies can reach the server.
+themselves are ignored. Headers from any other address are ignored too, so list only
+proxies you control, and firewall ports 80 and 443 so only they can reach the server.
 
-## Stats Endpoint
+## Stats endpoint
 
-Query server statistics (localhost only):
+Server statistics, on localhost only:
 
 ```bash
-# Basic stats
 curl http://127.0.0.1:9090/
-
-# Include active subdomains
-curl "http://127.0.0.1:9090/?subdomains=true"
+curl "http://127.0.0.1:9090/?subdomains=true"   # with the active subdomains
 ```
-
-Response:
 
 ```json
 {
@@ -461,141 +464,91 @@ Response:
 }
 ```
 
-## Makefile Commands
+## Troubleshooting
 
-| Command | Description |
-|---------|-------------|
-| `make build` | Standard optimized build |
-| `make build-small` | Maximum size optimization (~6MB) |
-| `make build-tiny` | With UPX compression (if installed) |
-| `make build-all` | Cross-compile for Linux/macOS |
-| `make build-dev` | Fast build with debug symbols |
-| `make dev` | Run a local server on unprivileged ports (see [Local Development](#local-development)) |
-| `make test` | Run tests |
-| `make lint` | Run golangci-lint (v2) |
-| `make vuln` | Check reachable code for known vulnerabilities |
-| `make clean` | Remove build artifacts |
+**Connection refused.** Check that the service runs and listens, and that the firewall lets
+the ports through:
 
-## Local Development
+```bash
+docker compose ps                      # or: sudo systemctl status tunnl
+sudo ss -tlnp | grep -E ':(22|80|443)'
+sudo ufw status
+```
+
+**Host key verification.** The first connection asks you to accept the server's host key:
+answer `yes`. If the host key ever changes, clients see a warning and stable URLs change
+too, so keep `HOST_KEY_PATH` across upgrades.
+
+**No URL shown, or the connection hangs.** Add `-t`, so the session has a terminal:
+
+```bash
+ssh -R 80:localhost:8080 proxy.tunnl.gg      # no URL
+ssh -t -R 80:localhost:8080 proxy.tunnl.gg   # works
+```
+
+For scripts without a terminal, use `-T` with [`output=json`](#json-output-for-scripts-and-agents).
+
+**Certificate errors.** Check that the files exist and haven't expired, then renew:
+
+```bash
+ls -la data/certs/                     # Docker; /etc/tunnl/ with systemd
+sudo certbot renew                     # the systemd deploy hook copies the new files
+sudo cp /etc/letsencrypt/live/yourdomain.com/*.pem data/certs/ && docker compose restart
+```
+
+# Contributing
+
+## Local development
 
 `make dev` runs a server on your machine with a self-signed certificate and
-`DOMAIN=localhost`, so you can try changes before deploying. In another terminal,
-start something on port 3000 and open a tunnel to it:
+`DOMAIN=localhost`, so you can try changes before deploying. In another terminal, start
+something on port 3000 and open a tunnel to it:
 
 ```bash
 ssh -p 2200 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
   -R 80:localhost:3000 localhost
 ```
 
-The session shows the tunnel URL, e.g. `https://happy-tiger-a1b2c3d4.localhost`.
-Add the dev HTTPS port to reach it: `curl -k https://happy-tiger-a1b2c3d4.localhost:8443`
-(`*.localhost` resolves to your machine in browsers and curl).
+The session shows the URL, e.g. `https://happy-tiger-a1b2c3d4.localhost`. Add the dev
+HTTPS port to reach it: `curl -k https://happy-tiger-a1b2c3d4.localhost:8443` (browsers and
+curl resolve `*.localhost` to your machine).
 
-## How It Works
+## Make commands
+
+| Command | Description |
+|---------|-------------|
+| `make build` | Optimized build |
+| `make build-small` | Smallest build (~6 MB) |
+| `make build-tiny` | Compressed with UPX, if installed |
+| `make build-all` | Cross-compile for Linux and macOS |
+| `make build-dev` | Fast build with debug symbols |
+| `make dev` | Local server on unprivileged ports (see [Local development](#local-development)) |
+| `make test` | Run the tests |
+| `make lint` | Run golangci-lint (v2) |
+| `make vuln` | Check reachable code for known vulnerabilities |
+| `make clean` | Remove build artifacts |
+
+## Project structure
 
 ```text
-┌─────────────────────────────────────────────────────────────────┐
-│                        TUNNL SERVER                             │
-│                                                                 │
-│  ┌─────────────┐  ┌─────────────┐  ┌───────────┐  ┌───────────┐ │
-│  │ SSH :22     │  │ HTTP :80    │  │HTTPS :443 │  │Stats :9090│ │
-│  │             │  │             │  │           │  │           │ │
-│  │ Accepts -R  │  │ ACME + 301  │  │ TLS term  │  │ Metrics   │ │
-│  │ connections │  │ redirect    │  │ Rev proxy │  │ (local)   │ │
-│  └──────┬──────┘  └─────────────┘  └─────┬─────┘  └───────────┘ │
-│         │                                │                      │
-│         ▼                                ▼                      │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                    Tunnel Registry                          ││
-│  │              map[subdomain]*Tunnel                          ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
-         │                                │
-         ▼                                │
-   ┌──────────┐     HTTPS request to      │
-   │ SSH Conn │  ←─ happy-tiger-a1b2c3d4 ─────┘
-   │ Client   │
-   └────┬─────┘
-        │
-        ▼
-   ┌──────────┐
-   │ App:8080 │
-   └──────────┘
+tunnl.gg/
+├── cmd/tunnl/           # Entry point
+├── pkg/
+│   ├── serve/           # Server startup, shared with hosted builds
+│   ├── server/          # SSH and HTTP handling, tunnel registry, accounts, abuse
+│   │                    # protection, limits, stats
+│   ├── tunnel/          # A tunnel: SSH channels, options, rate limits, request log
+│   ├── subdomain/       # Subdomain generation and validation
+│   ├── clientip/        # Visitor IPs behind trusted proxies
+│   └── config/          # Configuration and limits
+├── Dockerfile           # Multi-stage build (scratch image)
+├── docker-compose.yml   # Production and dev instances
+├── Makefile
+└── .golangci.yml        # Linter configuration
 ```
 
-1. Client runs `ssh -t -R 80:localhost:8080 proxy.tunnl.gg`
-2. Server generates subdomain (e.g., `happy-tiger-a1b2c3d4`) and shows URL
-3. Browser requests `https://happy-tiger-a1b2c3d4.tunnl.gg`
-4. Server looks up tunnel, proxies request via SSH to client
-5. Client forwards to `localhost:8080`
+`ARCHITECTURE.md` describes the design in more depth.
 
-## Running Multiple Instances
+# License
 
-You can run multiple instances on the same server using different ports:
-
-```bash
-# Instance 1 (production) - default ports
-./tunnl
-
-# Instance 2 (dev) - alternate ports
-SSH_ADDR=:2223 HTTP_ADDR=:8080 HTTPS_ADDR=:8443 STATS_ADDR=127.0.0.1:9091 \
-HOST_KEY_PATH=./host_key_dev ./tunnl
-```
-
-Connect to dev instance: `ssh -t -R 80:localhost:8080 proxy.tunnl.gg -p 2223`
-
-## Troubleshooting
-
-### Connection Refused
-
-```bash
-# Check service status
-docker compose ps
-# or
-sudo systemctl status tunnl
-
-# Check ports
-sudo ss -tlnp | grep -E ':(22|80|443)'
-
-# Check firewall
-sudo ufw status
-```
-
-### Host Key Verification Failed
-
-First-time clients must accept the host key:
-
-```bash
-ssh -t -R 80:localhost:8080 proxy.tunnl.gg
-# Are you sure you want to continue connecting (yes/no)? yes
-```
-
-### No Output / Connection Hangs
-
-The `-t` flag is **required**:
-
-```bash
-# Wrong
-ssh -R 80:localhost:8080 proxy.tunnl.gg
-
-# Correct
-ssh -t -R 80:localhost:8080 proxy.tunnl.gg
-```
-
-### Certificate Issues
-
-```bash
-# Check certificate files
-ls -la data/certs/
-
-# Renew certificates
-sudo certbot renew
-
-# Copy renewed certs and restart
-sudo cp /etc/letsencrypt/live/yourdomain.com/*.pem data/certs/
-docker compose restart
-```
-
-## License
-
-MIT
+[MIT](LICENSE)

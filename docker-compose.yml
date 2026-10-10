@@ -6,12 +6,13 @@ services:
     restart: unless-stopped
     ports:
       - "22:22"      # SSH tunnel connections
-      - "80:80"      # HTTP (ACME + redirect)
+      - "80:80"      # HTTP (redirects to HTTPS)
       - "443:443"    # HTTPS tunnel traffic
     volumes:
       - ./data/hostkey:/hostkey # SSH host key, generated on first start
       - ./data/certs:/certs:ro
     environment:
+      - DOMAIN=tunnl.gg # your domain: tunnels are served on its subdomains
       - SSH_ADDR=:22
       - HTTP_ADDR=:80
       - HTTPS_ADDR=:443
@@ -44,6 +45,7 @@ services:
       - ./data-dev/hostkey:/hostkey # SSH host key, generated on first start
       - ./data-dev/certs:/certs:ro
     environment:
+      - DOMAIN=tunnl.gg # your domain: tunnels are served on its subdomains
       - SSH_ADDR=:22
       - HTTP_ADDR=:80
       - HTTPS_ADDR=:443
