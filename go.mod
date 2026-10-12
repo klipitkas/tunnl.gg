@@ -2,7 +2,7 @@ module github.com/klipitkas/tunnl.gg
 
 go 1.26.0
 
-toolchain go1.26.8
+toolchain go1.26.9
 
 require (
 	github.com/mikesmitty/edkey v0.0.0-20170222072505-3356ea4e686a

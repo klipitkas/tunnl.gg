@@ -303,7 +303,7 @@ tunnl-dev` starts a second instance on other ports for staging.
 
 ## Install with systemd
 
-Build the binary (Go 1.26.8+):
+Build the binary (Go 1.26.9+):
 
 ```bash
 git clone https://github.com/klipitkas/tunnl.gg.git
