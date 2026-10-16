@@ -407,10 +407,24 @@ All settings are environment variables:
 | `HTTP_ADDR` | `:80` | HTTP listen address (redirects to HTTPS) |
 | `HTTPS_ADDR` | `:443` | HTTPS listen address |
 | `STATS_ADDR` | `127.0.0.1:9090` | [Stats endpoint](#stats-endpoint); keep it on localhost |
+| `MAX_TOTAL_TUNNELS` | `1000` | Positive server-wide tunnel admission cap; size from measured workload and available resources |
+| `PPROF_ADDR` | unset (disabled) | Optional private Go profiler, e.g. `127.0.0.1:9092`; accepts only numeric loopback addresses |
 | `HOST_KEY_PATH` | `host_key` | SSH host key, generated on first start. Keep it: stable URLs and clients' known_hosts depend on it |
 | `TLS_CERT` | `/etc/letsencrypt/live/tunnl.gg/fullchain.pem` | TLS certificate |
 | `TLS_KEY` | `/etc/letsencrypt/live/tunnl.gg/privkey.pem` | TLS private key |
 | `TRUSTED_PROXIES` | unset | Proxies whose headers identify visitors. See [Behind a proxy](#behind-a-proxy) |
+
+`MAX_TOTAL_TUNNELS` limits reserved tunnel slots, including connections still
+setting up. It does not raise per-IP or per-account limits. A higher cap allows
+more connected tunnels; usable traffic capacity still depends on workload,
+CPU, memory and bandwidth. The stats response includes `max_total_tunnels`.
+
+For a temporary CPU profile, set `PPROF_ADDR=127.0.0.1:9092`, restart, then run
+`curl 'http://127.0.0.1:9092/debug/pprof/profile?seconds=30' -o cpu.pprof` on the
+server during representative traffic. Inspect it with `go tool pprof cpu.pprof`.
+Heap, allocation, goroutine, mutex and block profiles are available on the same
+listener; mutex and block sampling require separate runtime instrumentation.
+Unset `PPROF_ADDR` and restart to disable the listener after measuring.
 
 To run a second instance on the same machine, give it other ports and its own host key:
 
