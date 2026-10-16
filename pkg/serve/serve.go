@@ -242,7 +242,9 @@ func Main(opts Options) {
 		log.Printf("Stats server shutdown error: %v", err)
 	}
 	if profileServer != nil {
-		profileServer.Close()
+		if err := profileServer.Close(); err != nil {
+			log.Printf("Profiler shutdown error: %v", err)
+		}
 	}
 
 	// Signal SSH goroutine to stop, then close listener
