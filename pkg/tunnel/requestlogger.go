@@ -2,7 +2,6 @@ package tunnel
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -60,7 +59,7 @@ type Entry struct {
 // SSH session they are logged to.
 type RequestLogger struct {
 	w      io.Writer
-	ch     chan string
+	ch     chan *bytes.Buffer
 	done   chan struct{}
 	mu     sync.RWMutex // guards closed and sending on ch against close(ch)
 	closed bool
@@ -79,7 +78,7 @@ type RequestLogger struct {
 func NewRequestLogger(w io.Writer, bufSize int) *RequestLogger {
 	l := &RequestLogger{
 		w:     w,
-		ch:    make(chan string, bufSize),
+		ch:    make(chan *bytes.Buffer, bufSize),
 		done:  make(chan struct{}),
 		notes: NewRateLimiter(tunnlNotesPerSecond, tunnlNotesPerSecond),
 	}
@@ -95,25 +94,63 @@ func NewJSONRequestLogger(w io.Writer, bufSize int) *RequestLogger {
 	return l
 }
 
-// drain reads from the channel and writes to the underlying writer.
+// drain combines already-queued lines into bounded writes. It never waits for
+// another line, so quiet tunnels and interactive notices are flushed promptly.
 func (l *RequestLogger) drain() {
 	defer close(l.done)
 	for line := range l.ch {
-		l.w.Write([]byte(line))
+	drainQueued:
+		for n := 1; n < 32 && line.Len() < maxLogBuffer; n++ {
+			select {
+			case next, ok := <-l.ch:
+				if !ok {
+					break drainQueued
+				}
+				if line.Len()+next.Len() > maxLogBuffer {
+					l.write(line)
+					line = next
+					break drainQueued
+				}
+				_, _ = line.Write(next.Bytes())
+				putLogBuffer(next)
+			default:
+				break drainQueued
+			}
+		}
+		l.write(line)
 	}
+}
+
+func (l *RequestLogger) write(line *bytes.Buffer) {
+	// Request logs are best effort; a disconnected SSH session can fail writes.
+	_, _ = l.w.Write(line.Bytes())
+	putLogBuffer(line)
 }
 
 // send queues a line without blocking, dropping it if the buffer is full or the
 // logger is closed.
 func (l *RequestLogger) send(line string) {
+	b := getLogBuffer()
+	b.WriteString(line)
+	l.sendBuffer(b)
+}
+
+// sendBuffer transfers ownership to the drain goroutine, or releases a dropped
+// line here. The caller must not access the buffer after sending it.
+func (l *RequestLogger) sendBuffer(line *bytes.Buffer) {
+	if line == nil {
+		return
+	}
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	if l.closed {
+		putLogBuffer(line)
 		return
 	}
 	select {
 	case l.ch <- line:
 	default:
+		putLogBuffer(line)
 	}
 }
 
@@ -149,16 +186,18 @@ func (l *RequestLogger) Log(e Entry) {
 	l.statsMu.Unlock()
 
 	if l.json {
-		l.send(JSONLine(jsonEntry(e)))
+		l.sendBuffer(jsonLogBuffer(jsonEntry(e)))
 		return
 	}
-	l.send(formatEntry(e))
+	b := getLogBuffer()
+	formatEntryTo(b, e)
+	l.sendBuffer(b)
 }
 
 // Notice writes a message line to the log, such as a warning or a summary.
 func (l *RequestLogger) Notice(message string) {
 	if l.json {
-		l.send(JSONLine(map[string]string{"event": "notice", "message": message}))
+		l.sendBuffer(jsonLogBuffer(map[string]string{"event": "notice", "message": message}))
 		return
 	}
 	l.send("\r" + strings.Repeat(" ", indentWidth) + colorYellow + sanitizeTerminalText(message) + colorReset + "\r\n")
@@ -168,13 +207,12 @@ func (l *RequestLogger) Notice(message string) {
 // JSON parsers read as whitespace, so they look right in a terminal too.
 // Control characters are escaped, so a value can't reach the terminal raw.
 func JSONLine(v any) string {
-	var b bytes.Buffer
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
+	b := jsonLogBuffer(v)
+	if b == nil {
 		return ""
 	}
-	return strings.TrimSuffix(b.String(), "\n") + "\r\n"
+	defer putLogBuffer(b)
+	return b.String()
 }
 
 // requestJSON is a request log entry in output=json.
@@ -273,7 +311,13 @@ func Header() string {
 // in the same terminal, such as a local server's own logs written with a bare
 // \n, has left the cursor partway along a line.
 func formatEntry(e Entry) string {
-	var b strings.Builder
+	b := getLogBuffer()
+	defer putLogBuffer(b)
+	formatEntryTo(b, e)
+	return b.String()
+}
+
+func formatEntryTo(b *bytes.Buffer, e Entry) {
 	b.WriteString("\r" + strings.Repeat(" ", indentWidth))
 	b.WriteString(colorDim + e.Time.UTC().Format("15:04:05") + colorReset + "  ")
 
@@ -313,7 +357,6 @@ func formatEntry(e Entry) string {
 		b.WriteString("\r" + strings.Repeat(" ", indentWidth+timeWidth+2))
 		b.WriteString(colorRed + "↳ " + sanitizeTerminalText(e.Detail) + colorReset + "\r\n")
 	}
-	return b.String()
 }
 
 // fitTarget escapes a request target and shortens it to the path column,

@@ -22,8 +22,10 @@ type proxyDeadlines struct {
 
 // newProxyDeadlines applies idle timeouts to r and w. It returns the request
 // and response writer to proxy with, and a stop function to call when done.
-func newProxyDeadlines(w http.ResponseWriter, r *http.Request, idleTimeout time.Duration) (http.ResponseWriter, *http.Request, func()) {
-	ctx, cancel := context.WithCancel(r.Context())
+// Accept the composed context separately so origin metadata and cancellation
+// only require one request copy.
+func newProxyDeadlines(ctx context.Context, w http.ResponseWriter, r *http.Request, idleTimeout time.Duration) (http.ResponseWriter, *http.Request, func()) {
+	ctx, cancel := context.WithCancel(ctx)
 	d := &proxyDeadlines{
 		rc:          http.NewResponseController(w),
 		idleTimeout: idleTimeout,

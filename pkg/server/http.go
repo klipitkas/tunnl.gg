@@ -197,8 +197,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var proxyErr error
 	var body *limitedReadCloser // the response body, once the app responds
-	r = r.WithContext(tunnel.WithOrigin(r.Context(), originAddr(client, r.RemoteAddr)))
-	dw, r, stopDeadlines := newProxyDeadlines(w, r, config.ProxyIdleTimeout)
+	ctx := tunnel.WithOrigin(r.Context(), originAddr(client, r.RemoteAddr))
+	dw, r, stopDeadlines := newProxyDeadlines(ctx, w, r, config.ProxyIdleTimeout)
 	defer stopDeadlines()
 	sw := &statusCaptureWriter{ResponseWriter: dw}
 
