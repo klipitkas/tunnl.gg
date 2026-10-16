@@ -58,7 +58,7 @@ type Inspector struct {
 	mu    sync.Mutex
 	next  uint64
 	ring  []Exchange // oldest first
-	bytes int        // of the bodies in ring
+	bytes int        // retained body buffer capacity in ring
 	subs  map[chan Exchange]struct{}
 }
 
@@ -96,7 +96,8 @@ func (i *Inspector) Add(e Exchange) Exchange {
 	return e
 }
 
-func bodyBytes(e Exchange) int { return len(e.RequestBody.Data) + len(e.ResponseBody.Data) }
+// Count capacity because transferred capture buffers can have spare storage.
+func bodyBytes(e Exchange) int { return cap(e.RequestBody.Data) + cap(e.ResponseBody.Data) }
 
 // dropped is b without its data.
 func dropped(b Body) Body {
@@ -177,6 +178,20 @@ func (c *Capture) Body() Body {
 	return Body{Data: bytes.Clone(c.buf.Bytes()), Size: c.n, Truncated: c.n > int64(c.buf.Len())}
 }
 
+// TakeBody transfers the captured bytes to the caller without copying. Use it
+// once recording is complete. Later reads use a new buffer and cannot mutate
+// the transferred body; Body still provides independent, repeatable snapshots.
+func (c *Capture) TakeBody() Body {
+	if c == nil {
+		return Body{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	body := Body{Data: c.buf.Bytes(), Size: c.n, Truncated: c.n > int64(c.buf.Len())}
+	c.buf = bytes.Buffer{}
+	return body
+}
+
 // Hop-by-hop headers aren't sent again when replaying.
 var hopHeaders = []string{"Connection", "Keep-Alive", "Proxy-Connection", "Te", "Trailer", "Transfer-Encoding", "Upgrade"}
 
@@ -251,7 +266,7 @@ func (t *Tunnel) Replay(ctx context.Context, id uint64) (Exchange, error) {
 	}
 	e.Status = resp.StatusCode
 	e.ResponseHeader = resp.Header.Clone()
-	e.ResponseBody = body.Body()
+	e.ResponseBody = body.TakeBody()
 	e.Duration = time.Since(e.Time)
 	t.logReplay(e, e.ResponseBody.Size)
 	return insp.Add(e), nil

@@ -213,3 +213,47 @@ func TestParseCORS(t *testing.T) {
 		}
 	}
 }
+
+func TestOptionsWithinReadyPendingAndClosed(t *testing.T) {
+	tun := New("ready", nil, "", 80, "")
+	defer tun.Close()
+	tun.AwaitOptions()
+	if _, ok := tun.OptionsWithin(context.Background(), time.Millisecond); ok {
+		t.Fatal("served a tunnel before its access options were known")
+	}
+	tun.SetOptions(Options{})
+	for _, host := range []string{"first.example", "updated.example"} {
+		tun.SetBaseOptions(Options{Host: host})
+		opts, ok := tun.OptionsWithin(context.Background(), time.Second)
+		if !ok || opts.Host != host {
+			t.Fatalf("saved options not observed: %+v, %v", opts, ok)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok := tun.OptionsWithin(ctx, time.Second); ok {
+		t.Fatal("served a canceled request")
+	}
+	tun.Close()
+	if _, ok := tun.OptionsWithin(context.Background(), time.Second); ok {
+		t.Fatal("served a closed tunnel")
+	}
+}
+
+func TestOptionsWithinWaitsForPublication(t *testing.T) {
+	tun := New("pending", nil, "", 80, "")
+	defer tun.Close()
+	tun.AwaitOptions()
+	done := make(chan Options, 1)
+	go func() {
+		opts, ok := tun.OptionsWithin(context.Background(), time.Second)
+		if !ok {
+			opts = Options{}
+		}
+		done <- opts
+	}()
+	tun.SetOptions(Options{Host: "published.example"})
+	if opts := <-done; opts.Host != "published.example" {
+		t.Fatalf("missing published options: %+v", opts)
+	}
+}

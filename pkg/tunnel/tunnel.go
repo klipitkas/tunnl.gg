@@ -204,19 +204,45 @@ func (t *Tunnel) releaseWaiters() {
 // returns false if ctx ends first or the tunnel closes without them: the
 // request must not be served, since the options may restrict who gets in.
 func (t *Tunnel) Options(ctx context.Context) (Options, bool) {
+	return t.options(ctx, 0)
+}
+
+// OptionsWithin bounds the wait for initial options. Ready tunnels do not
+// allocate a timeout context or timer. Saved options remain live on each call.
+// A nonpositive wait adds no deadline beyond ctx.
+func (t *Tunnel) OptionsWithin(ctx context.Context, wait time.Duration) (Options, bool) {
+	return t.options(ctx, wait)
+}
+
+func (t *Tunnel) options(ctx context.Context, wait time.Duration) (Options, bool) {
+	if ctx.Err() != nil {
+		return Options{}, false
+	}
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return Options{}, false
+	}
 	ready := t.optsReady
+	if ready == nil || t.optsSet {
+		opts := t.baseOpts.With(t.opts)
+		t.mu.Unlock()
+		return opts, true
+	}
 	t.mu.Unlock()
-	if ready != nil {
-		select {
-		case <-ready:
-		case <-ctx.Done():
-			return Options{}, false
-		}
+	if wait > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, wait)
+		defer cancel()
+	}
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		return Options{}, false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.closed || (ready != nil && !t.optsSet) {
+	if t.closed || !t.optsSet || ctx.Err() != nil {
 		return Options{}, false
 	}
 	return t.baseOpts.With(t.opts), true

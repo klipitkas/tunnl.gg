@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -32,43 +33,41 @@ const optionsWaitTimeout = 15 * time.Second
 
 // ServeHTTP implements http.Handler for HTTPS requests
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	setSecurityHeaders(w)
-
 	// Enforce request body size limit
 	if r.ContentLength > config.MaxRequestBodySize {
-		http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+		localError(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, config.MaxRequestBodySize)
+	if r.Body != nil && r.Body != http.NoBody {
+		r.Body = http.MaxBytesReader(w, r.Body, config.MaxRequestBodySize)
+	}
 
 	host := strings.ToLower(stripPort(r.Host))
 	domain := strings.ToLower(s.domain)
 
 	if !strings.HasSuffix(host, "."+domain) {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
+		localError(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 
 	sub := strings.TrimSuffix(host, "."+domain)
 
 	if !subdomain.IsLabel(sub) {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
+		localError(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 
 	tun := s.GetTunnel(sub)
 	if tun == nil {
-		http.Error(w, "Not Found", http.StatusNotFound)
+		localError(w, "Not Found", http.StatusNotFound)
 		return
 	}
 
 	// The client sends its options just after the tunnel opens; until then
 	// it's unknown who may get in
-	waitCtx, cancelWait := context.WithTimeout(r.Context(), optionsWaitTimeout)
-	opts, ok := tun.Options(waitCtx)
-	cancelWait()
+	opts, ok := tun.OptionsWithin(r.Context(), optionsWaitTimeout)
 	if !ok {
-		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		localError(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -77,17 +76,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// tunnel's budget
 	if !opts.Allows(client.Addr) {
 		logTunnlEvent(tun, r, client, http.StatusForbidden, "not on the tunnel's allowlist")
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		localError(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
 	// Throttle only the visitor: the tunnel owner doesn't control who sends
 	// traffic to their URL, so exceeding the limit must not affect the tunnel.
-	visitor := visitorKey(client.Addr.String())
+	visitorIP := client.Addr.String()
+	visitor := visitorIP
+	if client.Addr.Is6() {
+		visitor = visitorKeyAddr(client.Addr)
+	}
 	if !tun.AllowRequest(visitor) {
 		logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "rate limited by tunnl")
 		w.Header().Set("Retry-After", "1")
-		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		localError(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
 	}
 
@@ -107,6 +110,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		h.Set("Access-Control-Max-Age", "600")
 		logTunnlEvent(tun, r, client, http.StatusNoContent, "CORS preflight answered")
+		setSecurityHeaders(w)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -118,7 +122,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !tun.PasswordTriesLeft(visitor) {
 			logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "too many wrong passwords (tunnl limit)")
 			w.Header().Set("Retry-After", "10")
-			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+			localError(w, "Too Many Requests", http.StatusTooManyRequests)
 			return
 		}
 		if !opts.Auth.Check(r) {
@@ -128,7 +132,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			logTunnlEvent(tun, r, client, http.StatusUnauthorized, "no or wrong password")
 			w.Header().Set("WWW-Authenticate", `Basic realm="`+sub+"."+s.domain+`", charset="UTF-8"`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			localError(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 		// The tunnel's password is not for the app
@@ -148,17 +152,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Upgraded connections are long-lived, so cap how many are open at once
 		if !s.wsPerVisitor.acquire(visitor) {
 			logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "too many open WebSockets from this visitor (tunnl limit)")
-			http.Error(w, "Too Many WebSocket Connections", http.StatusTooManyRequests)
+			localError(w, "Too Many WebSocket Connections", http.StatusTooManyRequests)
 			return
 		}
 		defer s.wsPerVisitor.release(visitor)
 		if !s.wsPerTunnel.acquire(sub) {
 			logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "too many open WebSockets on this tunnel (tunnl limit)")
-			http.Error(w, "Too Many WebSocket Connections", http.StatusTooManyRequests)
+			localError(w, "Too Many WebSocket Connections", http.StatusTooManyRequests)
 			return
 		}
 		defer s.wsPerTunnel.release(sub)
 
+		setSecurityHeaders(w)
 		s.handleWebSocket(w, r, tun, sub, client, opts)
 		return
 	}
@@ -168,14 +173,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.reqPerVisitor.acquire(visitor) {
 		logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "too many open requests from this visitor (tunnl limit)")
 		w.Header().Set("Retry-After", "1")
-		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		localError(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
 	}
 	defer s.reqPerVisitor.release(visitor)
 	if !s.reqPerTunnel.acquire(sub) {
 		logTunnlEvent(tun, r, client, http.StatusServiceUnavailable, "too many open requests on this tunnel (tunnl limit)")
 		w.Header().Set("Retry-After", "1")
-		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		localError(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	defer s.reqPerTunnel.release(sub)
@@ -197,7 +202,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var proxyErr error
 	var body *limitedReadCloser // the response body, once the app responds
-	ctx := tunnel.WithOrigin(r.Context(), originAddr(client, r.RemoteAddr))
+	ctx := tunnel.WithOrigin(r.Context(), originAddr(client.Addr, visitorIP, r.RemoteAddr))
 	dw, r, stopDeadlines := newProxyDeadlines(ctx, w, r, config.ProxyIdleTimeout)
 	defer stopDeadlines()
 	sw := &statusCaptureWriter{ResponseWriter: dw}
@@ -222,7 +227,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if opts.Host != "" {
 				pr.Out.Host = opts.Host
 			}
-			setForwardedHeaders(pr.Out.Header, pr.In, client)
+			setForwardedHeaders(pr.Out.Header, pr.In, client, visitorIP)
 			if insp != nil {
 				outHost, outHeader = pr.Out.Host, pr.Out.Header.Clone()
 			}
@@ -282,7 +287,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Status:  sw.status,
 			Bytes:   sw.bytes,
 			Latency: time.Since(requestStart),
-			Visitor: client.Addr.String(),
+			Visitor: visitorIP,
 			Detail:  detail,
 		})
 		status := sw.status
@@ -296,12 +301,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				Method:         r.Method,
 				Target:         target,
 				Host:           outHost,
-				Visitor:        client.Addr.String(),
+				Visitor:        visitorIP,
 				RequestHeader:  outHeader,
-				RequestBody:    reqBody.Body(),
+				RequestBody:    reqBody.TakeBody(),
 				Status:         sw.status,
 				ResponseHeader: respHeader,
-				ResponseBody:   respBody.Body(),
+				ResponseBody:   respBody.TakeBody(),
 				Duration:       time.Since(requestStart),
 				Note:           detail,
 			})
@@ -406,7 +411,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 		Visitor: client.Addr.String(),
 	}
 
-	backendConn, err := tun.Dial(tunnel.WithOrigin(r.Context(), originAddr(client, r.RemoteAddr)))
+	backendConn, err := tun.Dial(tunnel.WithOrigin(r.Context(), originAddr(client.Addr, wsEntry.Visitor, r.RemoteAddr)))
 	if err != nil {
 		log.Printf("WebSocket backend dial error for %s: %v", sub, err)
 		failed := wsEntry
@@ -439,7 +444,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 
 	// The upgrade request is written as-is, so give the app the same
 	// forwarding headers as proxied requests
-	setForwardedHeaders(r.Header, r, client)
+	setForwardedHeaders(r.Header, r, client, wsEntry.Visitor)
 	if opts.Host != "" {
 		r.Host = opts.Host
 	}
@@ -578,6 +583,11 @@ func setCORS(h http.Header, allow string, credentials bool) {
 	}
 }
 
+func localError(w http.ResponseWriter, message string, status int) {
+	setSecurityHeaders(w)
+	http.Error(w, message, status)
+}
+
 func setSecurityHeaders(w http.ResponseWriter) {
 	for name, value := range securityHeaders {
 		w.Header().Set(name, value)
@@ -604,6 +614,7 @@ func hasWarningCookie(r *http.Request, sub string) bool {
 }
 
 func (s *Server) redirectToWarningPage(w http.ResponseWriter, r *http.Request, sub string) {
+	setSecurityHeaders(w)
 	originalURL := "https://" + r.Host + r.URL.RequestURI()
 	fullSubdomain := sub + "." + s.domain
 	warningURL := fmt.Sprintf("https://%s/#/warning?redirect=%s&subdomain=%s",
@@ -622,7 +633,7 @@ func isWebSocketRequest(r *http.Request) bool {
 // tunneled app, so the app only sees values set by this server: the resolved
 // visitor, the public host, and the scheme the visitor used. CF-Connecting-IP
 // is kept only when it came from Cloudflare; otherwise a visitor could set it.
-func setForwardedHeaders(out http.Header, in *http.Request, client clientip.Result) {
+func setForwardedHeaders(out http.Header, in *http.Request, client clientip.Result, visitorIP string) {
 	out.Del("Forwarded")
 	out.Del("X-Forwarded-For")
 	out.Del("X-Forwarded-Host")
@@ -632,7 +643,7 @@ func setForwardedHeaders(out http.Header, in *http.Request, client clientip.Resu
 	}
 
 	if client.Addr.IsValid() {
-		out.Set("X-Forwarded-For", client.Addr.String())
+		out.Set("X-Forwarded-For", visitorIP)
 	}
 	out.Set("X-Forwarded-Host", in.Host)
 	if in.TLS != nil {
@@ -645,12 +656,21 @@ func setForwardedHeaders(out http.Header, in *http.Request, client clientip.Resu
 // originAddr returns the "ip:port" to report as a forwarded channel's origin:
 // the resolved visitor, with the peer's port since a proxy doesn't forward the
 // visitor's port.
-func originAddr(client clientip.Result, remoteAddr string) string {
+func originAddr(addr netip.Addr, visitorIP, remoteAddr string) string {
 	_, port, err := net.SplitHostPort(remoteAddr)
-	if err != nil || !client.Addr.IsValid() {
+	if err != nil || !addr.IsValid() {
 		return remoteAddr
 	}
-	return net.JoinHostPort(client.Addr.String(), port)
+	return net.JoinHostPort(visitorIP, port)
+}
+
+// visitorKeyAddr avoids reparsing an already resolved visitor address.
+func visitorKeyAddr(addr netip.Addr) string {
+	addr = addr.Unmap()
+	if addr.Is6() && addr.Zone() == "" {
+		return netip.PrefixFrom(addr, 64).Masked().String()
+	}
+	return addr.String()
 }
 
 // visitorKey returns the rate-limit key for a request's remote address. IPv6

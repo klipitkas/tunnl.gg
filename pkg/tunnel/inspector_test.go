@@ -81,3 +81,60 @@ func TestInspectorMemoryBudget(t *testing.T) {
 		t.Errorf("kept %d exchanges, want all %d with or without bodies", len(list), InspectorSize)
 	}
 }
+
+func TestCaptureTransferKeepsSnapshotsIndependent(t *testing.T) {
+	c := NewCapture(io.NopCloser(strings.NewReader("firstsecond")))
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(c, buf); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := c.Body()
+	body := c.TakeBody()
+	if string(body.Data) != "first" || body.Size != 5 || body.Truncated {
+		t.Fatalf("bad transfer: %+v", body)
+	}
+	// Neither an old snapshot nor a subsequent read may change transferred data.
+	snapshot.Data[0] = 'X'
+	if _, err := io.Copy(io.Discard, c); err != nil {
+		t.Fatal(err)
+	}
+	if string(body.Data) != "first" {
+		t.Fatalf("transferred body mutated: %q", body.Data)
+	}
+	body.Data[0] = 'Y'
+	if got := c.Body(); string(got.Data) != "second" {
+		t.Fatalf("new capture aliases transfer: %q", got.Data)
+	}
+	var none *Capture
+	if got := none.TakeBody(); got.Size != 0 || len(got.Data) != 0 {
+		t.Fatal("nil transfer is not empty")
+	}
+}
+
+func TestCaptureTransferTruncation(t *testing.T) {
+	c := NewCapture(io.NopCloser(strings.NewReader(strings.Repeat("x", MaxInspectedBody+100))))
+	if _, err := io.Copy(io.Discard, c); err != nil {
+		t.Fatal(err)
+	}
+	got := c.TakeBody()
+	if len(got.Data) != MaxInspectedBody || got.Size != MaxInspectedBody+100 || !got.Truncated {
+		t.Fatalf("bad transfer metadata: len=%d size=%d truncated=%v", len(got.Data), got.Size, got.Truncated)
+	}
+}
+
+func TestInspectorBudgetsRetainedCapacity(t *testing.T) {
+	insp := NewInspector()
+	for range InspectorSize {
+		insp.Add(Exchange{ResponseBody: Body{Data: make([]byte, 1, MaxInspectedBody), Size: 1}})
+	}
+	retained := 0
+	for _, e := range insp.List() {
+		retained += cap(e.RequestBody.Data) + cap(e.ResponseBody.Data)
+	}
+	if retained > MaxInspectorBytes {
+		t.Fatalf("retained %d bytes, budget %d", retained, MaxInspectorBytes)
+	}
+	if !insp.List()[0].ResponseBody.Dropped {
+		t.Fatal("old buffers should be released when their capacity exceeds the budget")
+	}
+}
