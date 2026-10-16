@@ -176,6 +176,37 @@ func TestOrigin(t *testing.T) {
 	}
 }
 
+func TestChannelConnClosedDeadlinesDoNotRetainConnection(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	c := newChannelConn(&pipeChannel{Conn: local}, "closed")
+	c.Close()
+	deadline := time.Now().Add(2 * time.Hour)
+	if err := c.SetReadDeadline(deadline); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("read deadline on closed channel: %v", err)
+	}
+	if err := c.SetWriteDeadline(deadline); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("write deadline on closed channel: %v", err)
+	}
+	if c.readTimer != nil || c.writeTimer != nil {
+		t.Fatal("closed channel created a timer retaining the SSH connection")
+	}
+}
+
+func TestDialCanceledBeforeOpening(t *testing.T) {
+	opener := &fakeOpener{}
+	tun := New("canceled", opener, "localhost", 80, "")
+	defer tun.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := tun.Dial(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Dial: %v", err)
+	}
+	if len(tun.pendingOpens) != 0 {
+		t.Fatal("canceled dial reserved a channel slot")
+	}
+}
+
 func TestDial_WaitsForSlotWhenOpensUnanswered(t *testing.T) {
 	opener := &fakeOpener{release: make(chan struct{})}
 	tun := New("happy-tiger-00000001", opener, "localhost", 8080, "192.0.2.1")

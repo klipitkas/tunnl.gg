@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -41,6 +42,73 @@ func TestInspectorKeepsTheLatest(t *testing.T) {
 	}
 	cancel()
 	insp.Add(Exchange{}) // after cancelling, nothing is sent
+}
+
+func TestInspectorRepeatedWrapAndBodyEviction(t *testing.T) {
+	i := NewInspector()
+	for n := uint64(1); n <= 10*InspectorSize; n++ {
+		// Empty slices with capacity still retain memory and must be dropped.
+		data := make([]byte, int(n%2)*MaxInspectedBody, MaxInspectedBody)
+		i.Add(Exchange{Target: "/test", ResponseBody: Body{Data: data, Size: int64(len(data))}})
+		list := i.List()
+		first := n - uint64(len(list)) + 1
+		retained := 0
+		for j, e := range list {
+			if e.ID != first+uint64(j) {
+				t.Fatalf("at %d: history is out of order: %d", n, e.ID)
+			}
+			got, ok := i.Get(e.ID)
+			if !ok || got.ID != e.ID || got.ResponseBody.Dropped != e.ResponseBody.Dropped {
+				t.Fatalf("Get(%d) differs from List", e.ID)
+			}
+			retained += bodyBytes(e)
+		}
+		if retained > MaxInspectorBytes || retained != i.bytes {
+			t.Fatalf("at %d: retained=%d counted=%d", n, retained, i.bytes)
+		}
+		for _, gone := range []uint64{0, first - 1, n + 1} {
+			if _, ok := i.Get(gone); ok {
+				t.Fatalf("Get(%d) returned an exchange outside the history", gone)
+			}
+		}
+	}
+}
+
+func TestInspectorConcurrentReaders(t *testing.T) {
+	i := NewInspector()
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for range 200 {
+				e := i.Add(Exchange{Method: "GET"})
+				i.Get(e.ID)
+				list := i.List()
+				for j := 1; j < len(list); j++ {
+					if list[j].ID != list[j-1].ID+1 {
+						t.Error("history IDs are not consecutive")
+					}
+				}
+			}
+		})
+	}
+	wg.Wait()
+}
+
+func TestInspectorSparseHistoryStorage(t *testing.T) {
+	i := NewInspector()
+	if cap(i.ring) != 0 {
+		t.Fatal("an unused inspector allocated history storage")
+	}
+	i.Add(Exchange{Method: "GET"})
+	if cap(i.ring) >= InspectorSize/2 {
+		t.Fatal("one request reserved most of the full history")
+	}
+	for range 2 * InspectorSize {
+		i.Add(Exchange{Method: "GET"})
+		if cap(i.ring) > InspectorSize {
+			t.Fatal("history growth retained unused exchange slots")
+		}
+	}
 }
 
 func TestCapture(t *testing.T) {

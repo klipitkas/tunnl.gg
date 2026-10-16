@@ -62,6 +62,9 @@ func origin(ctx context.Context) (string, uint32) {
 // Dial waits for a slot until its deadline: bursts queue briefly, while a
 // client that ignores opens can't make the server accumulate goroutines.
 func (t *Tunnel) Dial(ctx context.Context) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	originAddr, originPort := origin(ctx)
 	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
@@ -80,15 +83,25 @@ func (t *Tunnel) Dial(ctx context.Context) (net.Conn, error) {
 	})
 
 	type result struct {
-		ch   ssh.Channel
-		reqs <-chan *ssh.Request
-		err  error
+		ch  ssh.Channel
+		err error
 	}
-	done := make(chan result, 1)
+	// Transfer ownership directly. An opener whose caller has left closes
+	// its own late result, without another goroutine waiting on it.
+	done := make(chan result)
 	go func() {
 		ch, reqs, err := t.opener.OpenChannel("forwarded-tcpip", payload)
 		<-t.pendingOpens // the client answered, or the connection closed
-		done <- result{ch, reqs, err}
+		if err == nil {
+			go ssh.DiscardRequests(reqs)
+		}
+		select {
+		case done <- result{ch, err}:
+		case <-ctx.Done():
+			if err == nil {
+				ch.Close()
+			}
+		}
 	}()
 
 	select {
@@ -96,16 +109,8 @@ func (t *Tunnel) Dial(ctx context.Context) (net.Conn, error) {
 		if res.err != nil {
 			return nil, res.err
 		}
-		go ssh.DiscardRequests(res.reqs)
 		return newChannelConn(res.ch, t.Subdomain), nil
 	case <-ctx.Done():
-		// Close the channel if the client accepts it after we gave up
-		go func() {
-			if res := <-done; res.err == nil {
-				go ssh.DiscardRequests(res.reqs)
-				res.ch.Close()
-			}
-		}()
 		return nil, ctx.Err()
 	}
 }
@@ -121,6 +126,7 @@ type channelConn struct {
 	addr tunnelAddr
 
 	mu         sync.Mutex
+	closed     bool
 	readTimer  *time.Timer
 	writeTimer *time.Timer
 }
@@ -142,6 +148,9 @@ func (c *channelConn) SetDeadline(t time.Time) error {
 func (c *channelConn) SetReadDeadline(t time.Time) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return net.ErrClosed
+	}
 	c.readTimer = c.resetTimer(c.readTimer, t)
 	return nil
 }
@@ -149,6 +158,9 @@ func (c *channelConn) SetReadDeadline(t time.Time) error {
 func (c *channelConn) SetWriteDeadline(t time.Time) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return net.ErrClosed
+	}
 	c.writeTimer = c.resetTimer(c.writeTimer, t)
 	return nil
 }
@@ -171,6 +183,7 @@ func (c *channelConn) resetTimer(timer *time.Timer, t time.Time) *time.Timer {
 
 func (c *channelConn) Close() error {
 	c.mu.Lock()
+	c.closed = true // deadline setters must not rearm timers after cleanup
 	for _, timer := range []*time.Timer{c.readTimer, c.writeTimer} {
 		if timer != nil {
 			timer.Stop()

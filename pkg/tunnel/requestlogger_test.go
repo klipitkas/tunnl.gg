@@ -183,6 +183,26 @@ func TestFitTarget(t *testing.T) {
 	}
 }
 
+func TestFitTargetUnicodeAndEscaping(t *testing.T) {
+	for _, target := range []string{
+		"/short/日本語",
+		"/" + strings.Repeat("日本語/", 100) + "?last=τέλος",
+		"/controls\x1b[31m\u202e" + strings.Repeat("x", 100) + "\r\n",
+		"/invalid/\xff\xfe" + strings.Repeat("z", 100) + "\xff",
+	} {
+		// The old implementation is a reference for preserving terminal output.
+		runes := []rune(sanitizeTerminalText(target))
+		want := string(runes)
+		if len(runes) > targetWidth {
+			head := (targetWidth - 1) / 2
+			want = string(runes[:head]) + "…" + string(runes[len(runes)-(targetWidth-1-head):])
+		}
+		if got := fitTarget(target); got != want {
+			t.Errorf("path formatting changed: got %q, want %q", got, want)
+		}
+	}
+}
+
 func TestLog_EscapesTerminalControls(t *testing.T) {
 	e := testEntry()
 	e.Target = "/ok\x1b[31m\r\nspoofed\u202e"

@@ -517,19 +517,24 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 // It resets the read deadline on src after each successful read.
 // Returns the number of bytes written and any error.
 func copyWithLimits(dst, src net.Conn, maxBytes int64, idleTimeout time.Duration) (int64, error) {
-	buf := make([]byte, 32*1024)
+	buf := responseBuffers.Get()
+	defer responseBuffers.Put(buf)
 	var written int64
 	for {
 		src.SetReadDeadline(time.Now().Add(idleTimeout))
 		n, readErr := src.Read(buf)
 		if n > 0 {
-			written += int64(n)
-			if written > maxBytes {
+			if int64(n) > maxBytes-written {
 				return written, fmt.Errorf("transfer limit exceeded")
 			}
 			dst.SetWriteDeadline(time.Now().Add(idleTimeout))
-			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
+			nw, writeErr := dst.Write(buf[:n])
+			written += int64(nw)
+			if writeErr != nil {
 				return written, writeErr
+			}
+			if nw != n {
+				return written, io.ErrShortWrite
 			}
 		}
 		if readErr != nil {
@@ -693,6 +698,9 @@ func visitorKey(remoteAddr string) string {
 
 // stripPort removes the port from a host string (e.g., "example.com:443" -> "example.com")
 func stripPort(host string) string {
+	if !strings.ContainsRune(host, ':') {
+		return host
+	}
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		return h
 	}

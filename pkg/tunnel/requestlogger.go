@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Terminal colors for the request log.
@@ -363,13 +364,27 @@ func formatEntryTo(b *bytes.Buffer, e Entry) {
 // cutting from the middle so the start of the path and the end of the query
 // string both stay visible.
 func fitTarget(target string) string {
-	runes := []rune(sanitizeTerminalText(target))
-	if len(runes) <= targetWidth {
-		return string(runes)
+	target = sanitizeTerminalText(target)
+	// Preserve the replacement of invalid UTF-8 performed by []rune, but
+	// avoid allocating a rune slice proportional to a normal request's URL.
+	if !utf8.ValidString(target) {
+		target = string([]rune(target))
+	}
+	if utf8.RuneCountInString(target) <= targetWidth {
+		return target
 	}
 	head := (targetWidth - 1) / 2
 	tail := targetWidth - 1 - head
-	return string(runes[:head]) + "…" + string(runes[len(runes)-tail:])
+	start, end := 0, len(target)
+	for range head {
+		_, size := utf8.DecodeRuneInString(target[start:])
+		start += size
+	}
+	for range tail {
+		_, size := utf8.DecodeLastRuneInString(target[:end])
+		end -= size
+	}
+	return target[:start] + "…" + target[end:]
 }
 
 func methodColor(method string) string {

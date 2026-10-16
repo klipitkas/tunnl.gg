@@ -57,7 +57,9 @@ const (
 type Inspector struct {
 	mu    sync.Mutex
 	next  uint64
-	ring  []Exchange // oldest first
+	ring  []Exchange // circular buffer, allocated on the first exchange
+	head  int        // oldest exchange
+	drop  int        // oldest candidate for dropping bodies, relative to head
 	bytes int        // retained body buffer capacity in ring
 	subs  map[chan Exchange]struct{}
 }
@@ -73,17 +75,28 @@ func (i *Inspector) Add(e Exchange) Exchange {
 	i.next++
 	e.ID = i.next
 	if len(i.ring) == InspectorSize {
-		i.bytes -= bodyBytes(i.ring[0])
-		copy(i.ring, i.ring[1:])
-		i.ring = i.ring[:InspectorSize-1]
+		i.bytes -= bodyBytes(i.ring[i.head])
+		i.ring[i.head] = e
+		i.head = (i.head + 1) % InspectorSize
+		i.drop = max(0, i.drop-1)
+	} else {
+		// Quiet tunnels keep only the storage they need. Clamp growth to the
+		// history limit so a full ring does not retain unused exchange slots.
+		if len(i.ring) == cap(i.ring) {
+			ring := make([]Exchange, len(i.ring), min(InspectorSize, max(1, 2*cap(i.ring))))
+			copy(ring, i.ring)
+			i.ring = ring
+		}
+		i.ring = append(i.ring, e)
 	}
-	i.ring = append(i.ring, e)
 	i.bytes += bodyBytes(e)
-	// Over budget: the oldest let their bodies go first
-	for j := 0; i.bytes > MaxInspectorBytes && j < len(i.ring)-1; j++ {
-		i.bytes -= bodyBytes(i.ring[j])
-		i.ring[j].RequestBody = dropped(i.ring[j].RequestBody)
-		i.ring[j].ResponseBody = dropped(i.ring[j].ResponseBody)
+	// Visit each candidate once, skipping the prefix already dropped.
+	for i.bytes > MaxInspectorBytes && i.drop < len(i.ring)-1 {
+		old := &i.ring[(i.head+i.drop)%len(i.ring)]
+		i.bytes -= bodyBytes(*old)
+		old.RequestBody = dropped(old.RequestBody)
+		old.ResponseBody = dropped(old.ResponseBody)
+		i.drop++
 	}
 	for ch := range i.subs {
 		// A subscriber that can't keep up misses exchanges rather than
@@ -101,7 +114,7 @@ func bodyBytes(e Exchange) int { return cap(e.RequestBody.Data) + cap(e.Response
 
 // dropped is b without its data.
 func dropped(b Body) Body {
-	if len(b.Data) == 0 {
+	if cap(b.Data) == 0 {
 		return b
 	}
 	return Body{Size: b.Size, Truncated: true, Dropped: true}
@@ -111,19 +124,24 @@ func dropped(b Body) Body {
 func (i *Inspector) List() []Exchange {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	return append([]Exchange(nil), i.ring...)
+	if len(i.ring) == 0 {
+		return nil
+	}
+	list := make([]Exchange, len(i.ring))
+	n := copy(list, i.ring[i.head:])
+	copy(list[n:], i.ring[:i.head])
+	return list
 }
 
 // Get returns the exchange with id, if it's still kept.
 func (i *Inspector) Get(id uint64) (Exchange, bool) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	for _, e := range i.ring {
-		if e.ID == id {
-			return e, true
-		}
+	if id == 0 || id > i.next || i.next-id >= uint64(len(i.ring)) {
+		return Exchange{}, false
 	}
-	return Exchange{}, false
+	index := (i.head + len(i.ring) - 1 - int(i.next-id)) % len(i.ring)
+	return i.ring[index], true
 }
 
 // Subscribe returns new exchanges as they're added, until cancel is called.
