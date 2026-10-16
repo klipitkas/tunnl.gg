@@ -8,6 +8,57 @@ import (
 	"github.com/klipitkas/tunnl.gg/pkg/config"
 )
 
+func TestConfiguredVisitorLimitPreservesActiveRequests(t *testing.T) {
+	s := newTestServer(t)
+	if got := s.GetStats(false).MaxInFlightPerVisitor; got != config.MaxInFlightPerVisitor {
+		t.Fatalf("default visitor limit %d, want %d", got, config.MaxInFlightPerVisitor)
+	}
+	for _, limit := range []int{0, -1} {
+		if err := s.SetMaxInFlightPerVisitor(limit); err == nil {
+			t.Fatalf("accepted nonpositive limit %d", limit)
+		}
+	}
+	if got := s.GetStats(false).MaxInFlightPerVisitor; got != config.MaxInFlightPerVisitor {
+		t.Fatal("invalid settings changed the active limit")
+	}
+	if err := s.SetMaxInFlightPerVisitor(2); err != nil {
+		t.Fatal(err)
+	}
+	const visitor = "198.51.100.1"
+	for i, want := range []bool{true, true, false} {
+		if got := s.reqPerVisitor.acquire(visitor); got != want {
+			t.Fatalf("request %d: admitted %v, want %v", i+1, got, want)
+		}
+	}
+	if err := s.SetMaxInFlightPerVisitor(1); err != nil {
+		t.Fatal(err)
+	}
+	if s.reqPerVisitor.total() != 2 || s.reqPerVisitor.acquire(visitor) {
+		t.Fatal("lowering the limit must retain existing requests and refuse new ones")
+	}
+	s.reqPerVisitor.release(visitor)
+	if s.reqPerVisitor.acquire(visitor) {
+		t.Fatal("a visitor at the lowered limit must still be refused")
+	}
+	if err := s.SetMaxInFlightPerVisitor(3); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.GetStats(false).MaxInFlightPerVisitor; got != 3 {
+		t.Fatalf("reported limit %d, want 3", got)
+	}
+	for i, want := range []bool{true, true, false} {
+		if got := s.reqPerVisitor.acquire(visitor); got != want {
+			t.Fatalf("request %d after raising the limit: admitted %v, want %v", i+1, got, want)
+		}
+	}
+	for range 3 {
+		s.reqPerVisitor.release(visitor)
+	}
+	if s.reqPerVisitor.total() != 0 {
+		t.Fatal("finished requests left reserved slots")
+	}
+}
+
 func TestConfiguredCapacityConcurrentReservations(t *testing.T) {
 	s := newTestServer(t)
 	if err := s.SetMaxTotalTunnels(17); err != nil {

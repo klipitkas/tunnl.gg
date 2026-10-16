@@ -771,7 +771,9 @@ func TestE2E_InFlightRequestsCapped(t *testing.T) {
 		arrived <- struct{}{}
 		<-release // an app that holds requests open
 	}))
-	tt.srv.reqPerVisitor = newConnLimiter(2)
+	if err := tt.srv.SetMaxInFlightPerVisitor(2); err != nil {
+		t.Fatal(err)
+	}
 	tt.srv.reqPerTunnel = newConnLimiter(3)
 
 	codes := make(chan int, 16)

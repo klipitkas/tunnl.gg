@@ -245,6 +245,17 @@ func (s *Server) SetMaxTotalTunnels(limit int) error {
 	return nil
 }
 
+// SetMaxInFlightPerVisitor sets the concurrent HTTP request limit per visitor
+// across all tunnels. Lowering it leaves active requests running; new requests
+// are rejected until the visitor's count falls below the limit.
+func (s *Server) SetMaxInFlightPerVisitor(limit int) error {
+	if limit <= 0 {
+		return fmt.Errorf("maximum in-flight requests per visitor must be positive")
+	}
+	s.reqPerVisitor.setMax(limit)
+	return nil
+}
+
 // ReleaseConnection releases a slot reserved by CheckAndReserveConnection.
 func (s *Server) ReleaseConnection(slot string) {
 	s.mu.Lock()

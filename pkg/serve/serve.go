@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -74,13 +73,16 @@ func Main(opts Options) {
 	if v := os.Getenv("TRUSTED_PROXIES"); v != "" {
 		cfg.TrustedProxies = v
 	}
-	if v := os.Getenv("MAX_TOTAL_TUNNELS"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			log.Fatal("MAX_TOTAL_TUNNELS must be a positive integer")
-		}
-		cfg.MaxTotalTunnels = n
+	maxTotal, err := positiveIntEnv("MAX_TOTAL_TUNNELS", cfg.MaxTotalTunnels)
+	if err != nil {
+		log.Fatal(err)
 	}
+	cfg.MaxTotalTunnels = maxTotal
+	maxInFlight, err := positiveIntEnv("MAX_IN_FLIGHT_PER_VISITOR", cfg.MaxInFlightPerVisitor)
+	if err != nil {
+		log.Fatal(err)
+	}
+	cfg.MaxInFlightPerVisitor = maxInFlight
 	profileServer, err := newProfileServer(os.Getenv("PPROF_ADDR"))
 	if err != nil {
 		log.Fatalf("Invalid PPROF_ADDR: %v", err)
@@ -103,6 +105,10 @@ func Main(opts Options) {
 		log.Fatal(err)
 	}
 	log.Printf("Total tunnel capacity: %d", cfg.MaxTotalTunnels)
+	if err := srv.SetMaxInFlightPerVisitor(cfg.MaxInFlightPerVisitor); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Concurrent HTTP requests per visitor: %d", cfg.MaxInFlightPerVisitor)
 
 	var handler http.Handler = srv
 	if opts.Setup != nil {

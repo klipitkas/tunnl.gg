@@ -408,6 +408,7 @@ All settings are environment variables:
 | `HTTPS_ADDR` | `:443` | HTTPS listen address |
 | `STATS_ADDR` | `127.0.0.1:9090` | [Stats endpoint](#stats-endpoint); keep it on localhost |
 | `MAX_TOTAL_TUNNELS` | `1000` | Positive server-wide tunnel admission cap; size from measured workload and available resources |
+| `MAX_IN_FLIGHT_PER_VISITOR` | `256` | Positive concurrent HTTP request limit per visitor across all tunnels; excess requests receive HTTP 429 |
 | `PPROF_ADDR` | unset (disabled) | Optional private Go profiler, e.g. `127.0.0.1:9092`; accepts only numeric loopback addresses |
 | `HOST_KEY_PATH` | `host_key` | SSH host key, generated on first start. Keep it: stable URLs and clients' known_hosts depend on it |
 | `TLS_CERT` | `/etc/letsencrypt/live/tunnl.gg/fullchain.pem` | TLS certificate |
@@ -418,6 +419,13 @@ All settings are environment variables:
 setting up. It does not raise per-IP or per-account limits. A higher cap allows
 more connected tunnels; usable traffic capacity still depends on workload,
 CPU, memory and bandwidth. The stats response includes `max_total_tunnels`.
+
+`MAX_IN_FLIGHT_PER_VISITOR` counts proxied HTTP requests that are still running,
+across every tunnel visited from the same IP (IPv6 visitors are grouped by /64).
+People sharing a public IP share this allowance. Set a positive integer and
+restart to change it; an unset or empty value uses 256. Zero, negative and
+non-integer values fail startup. WebSockets and requests-per-second limits are
+separate. The stats response reports `max_in_flight_per_visitor`.
 
 For a temporary CPU profile, set `PPROF_ADDR=127.0.0.1:9092`, restart, then run
 `curl 'http://127.0.0.1:9092/debug/pprof/profile?seconds=30' -o cpu.pprof` on the

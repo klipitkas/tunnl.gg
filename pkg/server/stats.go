@@ -10,14 +10,15 @@ import (
 
 // Stats holds server statistics
 type Stats struct {
-	ActiveTunnels    int      `json:"active_tunnels"`
-	MaxTotalTunnels  int      `json:"max_total_tunnels"`
-	UniqueIPs        int      `json:"unique_ips"`
-	TotalConnections uint64   `json:"total_connections"`
-	TotalRequests    uint64   `json:"total_requests"`
-	Subdomains       []string `json:"subdomains,omitempty"`
-	ActiveWebSockets int      `json:"active_websockets"`
-	ActiveRequests   int      `json:"active_requests"`
+	ActiveTunnels         int      `json:"active_tunnels"`
+	MaxTotalTunnels       int      `json:"max_total_tunnels"`
+	MaxInFlightPerVisitor int      `json:"max_in_flight_per_visitor"`
+	UniqueIPs             int      `json:"unique_ips"`
+	TotalConnections      uint64   `json:"total_connections"`
+	TotalRequests         uint64   `json:"total_requests"`
+	Subdomains            []string `json:"subdomains,omitempty"`
+	ActiveWebSockets      int      `json:"active_websockets"`
+	ActiveRequests        int      `json:"active_requests"`
 
 	// Abuse protection stats
 	BlockedIPs       int    `json:"blocked_ips"`
@@ -43,16 +44,17 @@ func (s *Server) GetStats(includeSubdomains bool) Stats {
 	blockedIPs, totalBlocked, totalRateLimited := s.abuseTracker.GetStats()
 
 	stats := Stats{
-		ActiveTunnels:    len(s.tunnels),
-		MaxTotalTunnels:  s.maxTotalTunnels,
-		UniqueIPs:        len(s.sshConns),
-		TotalConnections: atomic.LoadUint64(&s.totalConnections),
-		TotalRequests:    atomic.LoadUint64(&s.totalRequests),
-		ActiveWebSockets: s.wsPerTunnel.total(),
-		ActiveRequests:   s.reqPerTunnel.total(),
-		BlockedIPs:       blockedIPs,
-		TotalBlocked:     totalBlocked,
-		TotalRateLimited: totalRateLimited,
+		ActiveTunnels:         len(s.tunnels),
+		MaxTotalTunnels:       s.maxTotalTunnels,
+		MaxInFlightPerVisitor: s.reqPerVisitor.limit(),
+		UniqueIPs:             len(s.sshConns),
+		TotalConnections:      atomic.LoadUint64(&s.totalConnections),
+		TotalRequests:         atomic.LoadUint64(&s.totalRequests),
+		ActiveWebSockets:      s.wsPerTunnel.total(),
+		ActiveRequests:        s.reqPerTunnel.total(),
+		BlockedIPs:            blockedIPs,
+		TotalBlocked:          totalBlocked,
+		TotalRateLimited:      totalRateLimited,
 	}
 
 	if includeSubdomains {

@@ -15,6 +15,19 @@ func newConnLimiter(max int) *connLimiter {
 	return &connLimiter{max: max, counts: make(map[string]int)}
 }
 
+// setMax preserves existing reservations when changing the admission limit.
+func (c *connLimiter) setMax(max int) {
+	c.mu.Lock()
+	c.max = max
+	c.mu.Unlock()
+}
+
+func (c *connLimiter) limit() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.max
+}
+
 // acquire reserves a connection slot for key, returning false if key is at the limit.
 func (c *connLimiter) acquire(key string) bool {
 	c.mu.Lock()
