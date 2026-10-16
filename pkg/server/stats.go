@@ -11,6 +11,7 @@ import (
 // Stats holds server statistics
 type Stats struct {
 	ActiveTunnels    int      `json:"active_tunnels"`
+	MaxTotalTunnels  int      `json:"max_total_tunnels"`
 	UniqueIPs        int      `json:"unique_ips"`
 	TotalConnections uint64   `json:"total_connections"`
 	TotalRequests    uint64   `json:"total_requests"`
@@ -43,6 +44,7 @@ func (s *Server) GetStats(includeSubdomains bool) Stats {
 
 	stats := Stats{
 		ActiveTunnels:    len(s.tunnels),
+		MaxTotalTunnels:  s.maxTotalTunnels,
 		UniqueIPs:        len(s.sshConns),
 		TotalConnections: atomic.LoadUint64(&s.totalConnections),
 		TotalRequests:    atomic.LoadUint64(&s.totalRequests),

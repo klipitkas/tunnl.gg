@@ -212,6 +212,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxy := &httputil.ReverseProxy{
+		BufferPool: &responseBuffers,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// The tunnel's transport sends every request over SSH, so the
 			// URL host only needs to be valid

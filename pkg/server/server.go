@@ -38,6 +38,7 @@ type Server struct {
 	owners          map[string]subdomainOwner // every reserved or registered subdomain
 	slots           map[string]int            // reserved connection slots per IP or account
 	totalReserved   int                       // reserved connection slots server-wide
+	maxTotalTunnels int                       // configured reservation cap, guarded by mu
 	newSubdomain    func() (string, error)
 	sshConns        map[string][]*ssh.ServerConn // SSH connections per IP for forced closure
 	accountConns    map[string][]*ssh.ServerConn // SSH connections per account ID for forced closure
@@ -70,22 +71,23 @@ type Server struct {
 // New creates a new server instance
 func New(hostKeyPath string, domain string) (*Server, error) {
 	s := &Server{
-		tunnels:       make(map[string]*tunnel.Tunnel),
-		owners:        make(map[string]subdomainOwner),
-		newSubdomain:  subdomain.Generate,
-		slots:         make(map[string]int),
-		sshConns:      make(map[string][]*ssh.ServerConn),
-		accountConns:  make(map[string][]*ssh.ServerConn),
-		keyConns:      make(map[string][]*ssh.ServerConn),
-		abuseTracker:  NewAbuseTracker(),
-		freeLimits:    config.FreeLimits(),
-		wsPerTunnel:   newConnLimiter(config.MaxWebSocketsPerTunnel),
-		wsPerVisitor:  newConnLimiter(config.MaxWebSocketsPerVisitor),
-		reqPerTunnel:  newConnLimiter(config.MaxInFlightPerTunnel),
-		reqPerVisitor: newConnLimiter(config.MaxInFlightPerVisitor),
-		handshakes:    newConnLimiter(config.MaxHandshakesPerIP),
-		allHandshakes: newConnLimiter(config.MaxConcurrentHandshakes),
-		domain:        domain,
+		tunnels:         make(map[string]*tunnel.Tunnel),
+		maxTotalTunnels: config.MaxTotalTunnels,
+		owners:          make(map[string]subdomainOwner),
+		newSubdomain:    subdomain.Generate,
+		slots:           make(map[string]int),
+		sshConns:        make(map[string][]*ssh.ServerConn),
+		accountConns:    make(map[string][]*ssh.ServerConn),
+		keyConns:        make(map[string][]*ssh.ServerConn),
+		abuseTracker:    NewAbuseTracker(),
+		freeLimits:      config.FreeLimits(),
+		wsPerTunnel:     newConnLimiter(config.MaxWebSocketsPerTunnel),
+		wsPerVisitor:    newConnLimiter(config.MaxWebSocketsPerVisitor),
+		reqPerTunnel:    newConnLimiter(config.MaxInFlightPerTunnel),
+		reqPerVisitor:   newConnLimiter(config.MaxInFlightPerVisitor),
+		handshakes:      newConnLimiter(config.MaxHandshakesPerIP),
+		allHandshakes:   newConnLimiter(config.MaxConcurrentHandshakes),
+		domain:          domain,
 	}
 
 	// Set callback to close SSH connections when IP is blocked
@@ -221,14 +223,26 @@ func (s *Server) CheckAndReserveConnection(clientIP string, acct *Account) (slot
 	}
 	// Count reservations rather than registered tunnels, since tunnels are
 	// registered later and concurrent connections could otherwise overshoot
-	if s.totalReserved >= config.MaxTotalTunnels {
-		return "", fmt.Errorf("server capacity reached: max %d total tunnels", config.MaxTotalTunnels)
+	if s.totalReserved >= s.maxTotalTunnels {
+		return "", fmt.Errorf("server capacity reached: max %d total tunnels", s.maxTotalTunnels)
 	}
 
 	// Atomically reserve the connection slot
 	s.slots[slot]++
 	s.totalReserved++
 	return slot, nil
+}
+
+// SetMaxTotalTunnels sets the server-wide admission cap. Lowering it does not
+// disconnect existing tunnels; new reservations wait until enough slots free.
+func (s *Server) SetMaxTotalTunnels(limit int) error {
+	if limit <= 0 {
+		return fmt.Errorf("maximum total tunnels must be positive")
+	}
+	s.mu.Lock()
+	s.maxTotalTunnels = limit
+	s.mu.Unlock()
+	return nil
 }
 
 // ReleaseConnection releases a slot reserved by CheckAndReserveConnection.

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -73,6 +74,17 @@ func Main(opts Options) {
 	if v := os.Getenv("TRUSTED_PROXIES"); v != "" {
 		cfg.TrustedProxies = v
 	}
+	if v := os.Getenv("MAX_TOTAL_TUNNELS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			log.Fatal("MAX_TOTAL_TUNNELS must be a positive integer")
+		}
+		cfg.MaxTotalTunnels = n
+	}
+	profileServer, err := newProfileServer(os.Getenv("PPROF_ADDR"))
+	if err != nil {
+		log.Fatalf("Invalid PPROF_ADDR: %v", err)
+	}
 
 	trustedProxies, err := clientip.Parse(cfg.TrustedProxies)
 	if err != nil {
@@ -87,6 +99,10 @@ func Main(opts Options) {
 		log.Fatalf("Failed to create server: %v", err)
 	}
 	srv.SetTrustedProxies(trustedProxies)
+	if err := srv.SetMaxTotalTunnels(cfg.MaxTotalTunnels); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Total tunnel capacity: %d", cfg.MaxTotalTunnels)
 
 	var handler http.Handler = srv
 	if opts.Setup != nil {
@@ -170,7 +186,15 @@ func Main(opts Options) {
 	}
 
 	// Channel to signal fatal server errors
-	serverErr := make(chan error, 3)
+	serverErr := make(chan error, 4)
+	if profileServer != nil {
+		log.Printf("Private profiler listening on %s", profileServer.Addr)
+		go func() {
+			if err := profileServer.ListenAndServe(); err != http.ErrServerClosed {
+				serverErr <- fmt.Errorf("profiler server error: %w", err)
+			}
+		}()
+	}
 
 	log.Printf("HTTP server listening on %s (redirects to HTTPS)", cfg.HTTPAddr)
 	go func() {
@@ -216,6 +240,9 @@ func Main(opts Options) {
 	}
 	if err := statsServer.Shutdown(ctx); err != nil {
 		log.Printf("Stats server shutdown error: %v", err)
+	}
+	if profileServer != nil {
+		profileServer.Close()
 	}
 
 	// Signal SSH goroutine to stop, then close listener

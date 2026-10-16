@@ -144,14 +144,15 @@ func FreeLimits() Limits {
 
 // Config holds runtime configuration loaded from environment
 type Config struct {
-	SSHAddr     string
-	HTTPAddr    string
-	HTTPSAddr   string
-	StatsAddr   string
-	HostKeyPath string
-	TLSCert     string
-	TLSKey      string
-	Domain      string
+	SSHAddr         string
+	HTTPAddr        string
+	HTTPSAddr       string
+	StatsAddr       string
+	MaxTotalTunnels int // positive server-wide connection reservation limit
+	HostKeyPath     string
+	TLSCert         string
+	TLSKey          string
+	Domain          string
 	// TrustedProxies lists proxies whose forwarding headers identify visitors:
 	// CIDRs or IPs setting X-Forwarded-For, and "cloudflare" for Cloudflare's
 	// CF-Connecting-IP. Empty trusts nothing, for direct deployments.
@@ -161,13 +162,14 @@ type Config struct {
 // Default returns configuration with default values
 func Default() *Config {
 	return &Config{
-		SSHAddr:     ":22",
-		HTTPAddr:    ":80",
-		HTTPSAddr:   ":443",
-		StatsAddr:   "127.0.0.1:9090",
-		HostKeyPath: "host_key",
-		TLSCert:     fmt.Sprintf("/etc/letsencrypt/live/%s/fullchain.pem", DefaultDomain),
-		TLSKey:      fmt.Sprintf("/etc/letsencrypt/live/%s/privkey.pem", DefaultDomain),
-		Domain:      DefaultDomain,
+		SSHAddr:         ":22",
+		HTTPAddr:        ":80",
+		HTTPSAddr:       ":443",
+		StatsAddr:       "127.0.0.1:9090",
+		MaxTotalTunnels: MaxTotalTunnels,
+		HostKeyPath:     "host_key",
+		TLSCert:         fmt.Sprintf("/etc/letsencrypt/live/%s/fullchain.pem", DefaultDomain),
+		TLSKey:          fmt.Sprintf("/etc/letsencrypt/live/%s/privkey.pem", DefaultDomain),
+		Domain:          DefaultDomain,
 	}
 }

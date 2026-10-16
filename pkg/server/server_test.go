@@ -2,10 +2,55 @@ package server
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/klipitkas/tunnl.gg/pkg/config"
 )
+
+func TestConfiguredCapacityConcurrentReservations(t *testing.T) {
+	s := newTestServer(t)
+	if err := s.SetMaxTotalTunnels(17); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.GetStats(false).MaxTotalTunnels; got != 17 {
+		t.Fatalf("reported cap %d, want 17", got)
+	}
+	var wg sync.WaitGroup
+	slots := make(chan string, 100)
+	for i := range 100 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if slot, err := s.CheckAndReserveConnection(fmt.Sprintf("192.0.2.%d", i), nil); err == nil {
+				slots <- slot
+			}
+		}()
+	}
+	wg.Wait()
+	close(slots)
+	if len(slots) != 17 {
+		t.Fatalf("admitted %d reservations, want 17", len(slots))
+	}
+	if err := s.SetMaxTotalTunnels(0); err == nil {
+		t.Fatal("zero cap accepted")
+	}
+	if err := s.SetMaxTotalTunnels(-1); err == nil {
+		t.Fatal("negative cap accepted")
+	}
+	if err := s.SetMaxTotalTunnels(1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CheckAndReserveConnection("198.51.100.1", nil); err == nil {
+		t.Fatal("lowered cap admitted a reservation while full")
+	}
+	for slot := range slots {
+		s.ReleaseConnection(slot)
+	}
+	if _, err := s.CheckAndReserveConnection("198.51.100.1", nil); err != nil {
+		t.Fatalf("released slots were not reusable: %v", err)
+	}
+}
 
 func TestCheckAndReserveConnection_CapacityCountsReservations(t *testing.T) {
 	s := newTestServer(t)
