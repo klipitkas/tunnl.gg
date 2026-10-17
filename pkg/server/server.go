@@ -47,6 +47,7 @@ type Server struct {
 	freeLimits      config.Limits                // for anonymous clients; see SetFreeLimits
 	trafficSink     func(TrafficReport)          // see SetTrafficSink
 	trafficStop     chan struct{}
+	samplerStop     chan struct{} // stops sampling tunnels for the metrics
 	mu              sync.RWMutex
 	sshConfig       *ssh.ServerConfig
 	domain          string
@@ -55,6 +56,7 @@ type Server struct {
 	// Stats
 	totalConnections uint64
 	totalRequests    uint64
+	metrics          relayMetrics // served by StatsHandler at /metrics
 
 	// Abuse protection
 	abuseTracker  *AbuseTracker
@@ -87,8 +89,10 @@ func New(hostKeyPath string, domain string) (*Server, error) {
 		reqPerVisitor:   newConnLimiter(config.MaxInFlightPerVisitor),
 		handshakes:      newConnLimiter(config.MaxHandshakesPerIP),
 		allHandshakes:   newConnLimiter(config.MaxConcurrentHandshakes),
+		samplerStop:     make(chan struct{}),
 		domain:          domain,
 	}
+	go s.sampleTunnelsEvery(tunnelSampleInterval, s.samplerStop)
 
 	// Set callback to close SSH connections when IP is blocked
 	// Closing SSH connections triggers cleanup which removes tunnels via defers
@@ -293,7 +297,7 @@ func (s *Server) RegisterTunnel(sub string, conn sshConnection, bindAddr string,
 	if owner, held := s.owners[sub]; !held || owner.conn != conn {
 		return nil
 	}
-	t := tunnel.New(sub, conn, bindAddr, bindPort, clientIP)
+	t := tunnel.New(sub, timedOpener{conn, &s.metrics}, bindAddr, bindPort, clientIP)
 	t.Limits = limits
 	t.AccountID = accountID
 	if limits.Inspect {
@@ -430,6 +434,10 @@ func (s *Server) Stop() {
 	if s.trafficStop != nil {
 		close(s.trafficStop)
 		s.trafficStop = nil
+	}
+	if s.samplerStop != nil {
+		close(s.samplerStop)
+		s.samplerStop = nil
 	}
 	s.mu.Unlock()
 }

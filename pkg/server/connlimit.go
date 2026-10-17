@@ -50,6 +50,17 @@ func (c *connLimiter) release(key string) {
 	c.counts[key]--
 }
 
+// busiest returns the most connections any one key holds.
+func (c *connLimiter) busiest() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, count := range c.counts {
+		n = max(n, count)
+	}
+	return n
+}
+
 // total returns the number of connections currently held across all keys.
 func (c *connLimiter) total() int {
 	c.mu.Lock()

@@ -43,13 +43,16 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	}
 
 	// Do SSH handshake first so we can send error messages to the client
-	conn.SetDeadline(time.Now().Add(config.SSHHandshakeTimeout))
+	handshakeStart := time.Now()
+	conn.SetDeadline(handshakeStart.Add(config.SSHHandshakeTimeout))
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.sshConfig)
 	s.endHandshake(clientIP)
 	if err != nil {
+		s.metrics.sshFailed(err)
 		log.Printf("SSH handshake failed: %v", err)
 		return
 	}
+	s.metrics.sshConnected(sshConn.Conn, time.Since(handshakeStart))
 	conn.SetDeadline(time.Time{}) // clear deadline after successful handshake
 	defer sshConn.Close()
 

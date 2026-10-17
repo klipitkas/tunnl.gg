@@ -83,9 +83,20 @@ func Main(opts Options) {
 		log.Fatal(err)
 	}
 	cfg.MaxInFlightPerVisitor = maxInFlight
-	profileServer, err := newProfileServer(os.Getenv("PPROF_ADDR"))
+	traceWindow := os.Getenv("PPROF_TRACE_WINDOW")
+	if traceWindow != "" && os.Getenv("PPROF_ADDR") == "" {
+		log.Fatal("PPROF_TRACE_WINDOW needs PPROF_ADDR")
+	}
+	recorder, err := newFlightRecorder(traceWindow)
+	if err != nil {
+		log.Fatalf("Invalid PPROF_TRACE_WINDOW: %v", err)
+	}
+	profileServer, err := newProfileServer(os.Getenv("PPROF_ADDR"), recorder)
 	if err != nil {
 		log.Fatalf("Invalid PPROF_ADDR: %v", err)
+	}
+	if profileServer != nil {
+		enableContentionProfiles()
 	}
 
 	trustedProxies, err := clientip.Parse(cfg.TrustedProxies)
@@ -180,6 +191,9 @@ func Main(opts Options) {
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		},
+		// Count visitors' connections for the metrics
+		ConnContext: srv.HTTPSConnContext,
+		ConnState:   srv.HTTPSConnState,
 	}
 
 	// Stats server (localhost only)
@@ -195,6 +209,9 @@ func Main(opts Options) {
 	serverErr := make(chan error, 4)
 	if profileServer != nil {
 		log.Printf("Private profiler listening on %s", profileServer.Addr)
+		if recorder != nil {
+			log.Printf("Flight recorder keeping about %s of execution trace", traceWindow)
+		}
 		go func() {
 			if err := profileServer.ListenAndServe(); err != http.ErrServerClosed {
 				serverErr <- fmt.Errorf("profiler server error: %w", err)
@@ -251,6 +268,9 @@ func Main(opts Options) {
 		if err := profileServer.Close(); err != nil {
 			log.Printf("Profiler shutdown error: %v", err)
 		}
+	}
+	if recorder != nil {
+		recorder.Stop()
 	}
 
 	// Signal SSH goroutine to stop, then close listener

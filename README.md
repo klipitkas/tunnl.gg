@@ -410,6 +410,7 @@ All settings are environment variables:
 | `MAX_TOTAL_TUNNELS` | `1000` | Positive server-wide tunnel admission cap; size from measured workload and available resources |
 | `MAX_IN_FLIGHT_PER_VISITOR` | `256` | Positive concurrent HTTP request limit per visitor across all tunnels; excess requests receive HTTP 429 |
 | `PPROF_ADDR` | unset (disabled) | Optional private Go profiler, e.g. `127.0.0.1:9092`; accepts only numeric loopback addresses |
+| `PPROF_TRACE_WINDOW` | unset (disabled) | With `PPROF_ADDR`, keeps about this much execution trace in memory, e.g. `10s`, for the profiler's `/debug/pprof/trace-window`; costs a few percent of CPU |
 | `HOST_KEY_PATH` | `host_key` | SSH host key, generated on first start. Keep it: stable URLs and clients' known_hosts depend on it |
 | `TLS_CERT` | `/etc/letsencrypt/live/tunnl.gg/fullchain.pem` | TLS certificate |
 | `TLS_KEY` | `/etc/letsencrypt/live/tunnl.gg/privkey.pem` | TLS private key |
@@ -431,7 +432,11 @@ For a temporary CPU profile, set `PPROF_ADDR=127.0.0.1:9092`, restart, then run
 `curl 'http://127.0.0.1:9092/debug/pprof/profile?seconds=30' -o cpu.pprof` on the
 server during representative traffic. Inspect it with `go tool pprof cpu.pprof`.
 Heap, allocation, goroutine, mutex and block profiles are available on the same
-listener; mutex and block sampling require separate runtime instrumentation.
+listener. While it's on, the runtime samples one in 100 contended lock waits and
+blocking events in proportion to their length, every one of 100µs or more.
+With `PPROF_TRACE_WINDOW=10s` as well, `curl http://127.0.0.1:9092/debug/pprof/trace-window -o trace.out`
+saves about the last 10 seconds of execution trace, for example right after a
+stall; open it with `go tool trace trace.out`.
 Unset `PPROF_ADDR` and restart to disable the listener after measuring.
 
 To run a second instance on the same machine, give it other ports and its own host key:
@@ -485,6 +490,14 @@ curl "http://127.0.0.1:9090/?subdomains=true"   # with the active subdomains
   "subdomains": ["happy-tiger-a1b2c3d4", "calm-eagle-e5f6a7b8", "swift-wolf-d9e0f1a2"]
 }
 ```
+
+`curl http://127.0.0.1:9090/metrics` serves these counts and more in the Prometheus
+text format, for a local collector: proxied requests' latency and size histograms
+and results, requests tunnl answered itself by reason, how long tunnel clients take
+to open channels, visitors' HTTPS connections by protocol and TLS resumption, SSH
+clients by software and negotiated algorithms, every open tunnel's requests and bytes
+per minute, and Go runtime metrics such as scheduling latency. None of it names a
+tunnel, visitor or client.
 
 ## Troubleshooting
 

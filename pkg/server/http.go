@@ -33,8 +33,10 @@ const optionsWaitTimeout = 15 * time.Second
 
 // ServeHTTP implements http.Handler for HTTPS requests
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.metrics.countRequest(r)
 	// Enforce request body size limit
 	if r.ContentLength > config.MaxRequestBodySize {
+		s.metrics.answer(answerTooLarge)
 		localError(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -46,6 +48,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	domain := strings.ToLower(s.domain)
 
 	if !strings.HasSuffix(host, "."+domain) {
+		s.metrics.answer(answerBadHost)
 		localError(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
@@ -53,12 +56,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sub := strings.TrimSuffix(host, "."+domain)
 
 	if !subdomain.IsLabel(sub) {
+		s.metrics.answer(answerBadHost)
 		localError(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 
 	tun := s.GetTunnel(sub)
 	if tun == nil {
+		s.metrics.answer(answerNoTunnel)
 		localError(w, "Not Found", http.StatusNotFound)
 		return
 	}
@@ -67,6 +72,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// it's unknown who may get in
 	opts, ok := tun.OptionsWithin(r.Context(), optionsWaitTimeout)
 	if !ok {
+		s.metrics.answer(answerNoOptions)
 		localError(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -75,7 +81,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Before rate limiting, so visitors who aren't allowed can't use up the
 	// tunnel's budget
 	if !opts.Allows(client.Addr) {
-		logTunnlEvent(tun, r, client, http.StatusForbidden, "not on the tunnel's allowlist")
+		s.logTunnlEvent(tun, r, client, http.StatusForbidden, answerAllowlist, "not on the tunnel's allowlist")
 		localError(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -88,7 +94,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		visitor = visitorKeyAddr(client.Addr)
 	}
 	if !tun.AllowRequest(visitor) {
-		logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "rate limited by tunnl")
+		s.logTunnlEvent(tun, r, client, http.StatusTooManyRequests, answerRateLimited, "rate limited by tunnl")
 		w.Header().Set("Retry-After", "1")
 		localError(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
@@ -109,7 +115,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.Set("Access-Control-Allow-Headers", requested)
 		}
 		h.Set("Access-Control-Max-Age", "600")
-		logTunnlEvent(tun, r, client, http.StatusNoContent, "CORS preflight answered")
+		s.logTunnlEvent(tun, r, client, http.StatusNoContent, answerPreflight, "CORS preflight answered")
 		setSecurityHeaders(w)
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -120,7 +126,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// After rate limiting, which slows down password guessing
 	if opts.Auth != nil {
 		if !tun.PasswordTriesLeft(visitor) {
-			logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "too many wrong passwords (tunnl limit)")
+			s.logTunnlEvent(tun, r, client, http.StatusTooManyRequests, answerPasswordTries, "too many wrong passwords (tunnl limit)")
 			w.Header().Set("Retry-After", "10")
 			localError(w, "Too Many Requests", http.StatusTooManyRequests)
 			return
@@ -130,7 +136,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if _, _, sent := r.BasicAuth(); sent {
 				tun.PasswordFailed(visitor)
 			}
-			logTunnlEvent(tun, r, client, http.StatusUnauthorized, "no or wrong password")
+			s.logTunnlEvent(tun, r, client, http.StatusUnauthorized, answerPassword, "no or wrong password")
 			w.Header().Set("WWW-Authenticate", `Basic realm="`+sub+"."+s.domain+`", charset="UTF-8"`)
 			localError(w, "Unauthorized", http.StatusUnauthorized)
 			return
@@ -143,7 +149,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if tun.Limits.BrowserWarning && isBrowserRequest(r) &&
 		r.Header.Get("tunnl-skip-browser-warning") == "" &&
 		!hasWarningCookie(r, sub) {
-		logTunnlEvent(tun, r, client, http.StatusTemporaryRedirect, "browser sent to the warning page")
+		s.logTunnlEvent(tun, r, client, http.StatusTemporaryRedirect, answerWarningPage, "browser sent to the warning page")
 		s.redirectToWarningPage(w, r, sub)
 		return
 	}
@@ -151,13 +157,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if isWebSocketRequest(r) {
 		// Upgraded connections are long-lived, so cap how many are open at once
 		if !s.wsPerVisitor.acquire(visitor) {
-			logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "too many open WebSockets from this visitor (tunnl limit)")
+			s.logTunnlEvent(tun, r, client, http.StatusTooManyRequests, answerVisitorWebSockets, "too many open WebSockets from this visitor (tunnl limit)")
 			localError(w, "Too Many WebSocket Connections", http.StatusTooManyRequests)
 			return
 		}
 		defer s.wsPerVisitor.release(visitor)
 		if !s.wsPerTunnel.acquire(sub) {
-			logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "too many open WebSockets on this tunnel (tunnl limit)")
+			s.logTunnlEvent(tun, r, client, http.StatusTooManyRequests, answerTunnelWebSockets, "too many open WebSockets on this tunnel (tunnl limit)")
 			localError(w, "Too Many WebSocket Connections", http.StatusTooManyRequests)
 			return
 		}
@@ -171,14 +177,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Proxied requests can stay open for minutes, for example when a tunnel's
 	// app never responds, so cap how many are in flight
 	if !s.reqPerVisitor.acquire(visitor) {
-		logTunnlEvent(tun, r, client, http.StatusTooManyRequests, "too many open requests from this visitor (tunnl limit)")
+		s.logTunnlEvent(tun, r, client, http.StatusTooManyRequests, answerVisitorRequests, "too many open requests from this visitor (tunnl limit)")
 		w.Header().Set("Retry-After", "1")
 		localError(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
 	}
 	defer s.reqPerVisitor.release(visitor)
 	if !s.reqPerTunnel.acquire(sub) {
-		logTunnlEvent(tun, r, client, http.StatusServiceUnavailable, "too many open requests on this tunnel (tunnl limit)")
+		s.logTunnlEvent(tun, r, client, http.StatusServiceUnavailable, answerTunnelRequests, "too many open requests on this tunnel (tunnl limit)")
 		w.Header().Set("Retry-After", "1")
 		localError(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
@@ -234,6 +240,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 		Transport: tun.Transport(),
 		ModifyResponse: func(resp *http.Response) error {
+			s.metrics.headersTime.observe(latencyBuckets, int64(time.Since(requestStart)))
 			for name, value := range proxiedDefaultHeaders {
 				if resp.Header.Get(name) == "" {
 					resp.Header.Set(name, value)
@@ -295,6 +302,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusBadGateway
 		}
 		tun.CountRequest(status, in.n, sw.bytes, time.Since(requestStart))
+		s.metrics.requestDone(requestResult(sw.status, proxyErr, p != nil), time.Since(requestStart), in.n, sw.bytes)
 		if insp != nil {
 			insp.Add(tunnel.Exchange{
 				Time:           requestStart,
@@ -326,8 +334,10 @@ func logEntry(tun *tunnel.Tunnel, e tunnel.Entry) {
 	}
 }
 
-// logTunnlEvent logs a request that tunnl answered itself, without the app.
-func logTunnlEvent(tun *tunnel.Tunnel, r *http.Request, client clientip.Result, status int, note string) {
+// logTunnlEvent logs a request that tunnl answered itself, without the app,
+// counting it under why (an answer* constant).
+func (s *Server) logTunnlEvent(tun *tunnel.Tunnel, r *http.Request, client clientip.Result, status, why int, note string) {
+	s.metrics.answer(why)
 	tun.CountRequest(status, -1, -1, 0)
 	if insp := tun.Inspector(); insp != nil {
 		header := r.Header.Clone()
@@ -413,6 +423,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 
 	backendConn, err := tun.Dial(tunnel.WithOrigin(r.Context(), originAddr(client.Addr, wsEntry.Visitor, r.RemoteAddr)))
 	if err != nil {
+		s.metrics.wsDialFailed.Add(1)
 		log.Printf("WebSocket backend dial error for %s: %v", sub, err)
 		failed := wsEntry
 		failed.Status = http.StatusBadGateway
@@ -453,6 +464,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 		return
 	}
 
+	s.metrics.wsRelayed.Add(1)
 	opened := wsEntry
 	opened.Note = "open"
 	logEntry(tun, opened)
@@ -483,6 +495,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 	<-clientDone
 
 	tun.CountRequest(http.StatusSwitchingProtocols, backendBytes, clientBytes, time.Since(wsEntry.Time))
+	s.metrics.websocketDone(time.Since(wsEntry.Time), backendBytes+clientBytes)
 	closed := wsEntry
 	closed.Time = time.Now()
 	closed.Note = fmt.Sprintf("closed after %s, %s",

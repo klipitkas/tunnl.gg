@@ -149,6 +149,12 @@ func (t *Tunnel) Transport() *http.Transport {
 	return t.transport
 }
 
+// PendingOpens returns how many channel opens await the client's answer. At
+// config.MaxPendingChannelOpens, further requests wait for one to finish.
+func (t *Tunnel) PendingOpens() int {
+	return len(t.pendingOpens)
+}
+
 // EnableInspector makes the tunnel keep its latest requests. Call it before
 // the tunnel is shared.
 func (t *Tunnel) EnableInspector() {

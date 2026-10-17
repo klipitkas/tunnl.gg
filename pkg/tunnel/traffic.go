@@ -18,9 +18,16 @@ type Traffic struct {
 // Zero reports whether nothing was counted.
 func (t Traffic) Zero() bool { return t == Traffic{} }
 
+// Totals are a tunnel's counts since it opened.
+type Totals struct {
+	Requests int64
+	BytesOut int64 // response bodies
+}
+
 // trafficCounters are a tunnel's running counts.
 type trafficCounters struct {
 	requests, clientErrors, errors, bytesIn, bytesOut, latency atomic.Int64
+	totalRequests, totalBytesOut                               atomic.Int64 // never taken
 }
 
 // CountRequest counts a request with the status it got (0 if none), the
@@ -37,6 +44,14 @@ func (t *Tunnel) CountRequest(status int, bytesIn, bytesOut int64, latency time.
 	c.bytesIn.Add(max(bytesIn, 0))
 	c.bytesOut.Add(max(bytesOut, 0))
 	c.latency.Add(int64(latency))
+	c.totalRequests.Add(1)
+	c.totalBytesOut.Add(max(bytesOut, 0))
+}
+
+// Totals returns the counts since the tunnel opened. Unlike TakeTraffic, it
+// doesn't start them over.
+func (t *Tunnel) Totals() Totals {
+	return Totals{Requests: t.traffic.totalRequests.Load(), BytesOut: t.traffic.totalBytesOut.Load()}
 }
 
 // TakeTraffic returns the counts since the last call and starts over.

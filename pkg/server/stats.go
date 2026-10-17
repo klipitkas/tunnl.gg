@@ -81,6 +81,12 @@ func (s *Server) StatsHandler() http.Handler {
 			return
 		}
 
+		if r.URL.Path == "/metrics" {
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+			s.writeMetrics(w)
+			return
+		}
+
 		includeSubdomains := r.URL.Query().Get("subdomains") == "true"
 		stats := s.GetStats(includeSubdomains)
 
