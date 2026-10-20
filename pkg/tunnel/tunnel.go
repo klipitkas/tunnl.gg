@@ -70,10 +70,19 @@ func New(subdomain string, opener ChannelOpener, bindAddr string, bindPort uint3
 		),
 	}
 	t.unresponsiveAfter = unresponsiveAfter
+	observer, _ := opener.(ChannelObserver)
 	t.transport = &http.Transport{
 		// Every request goes to the client over an SSH channel, whatever the URL
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return t.Dial(ctx)
+			c, err := t.dial(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if observer != nil {
+				c.observer = observer
+				c.lastUse.Store(time.Now().UnixNano())
+			}
+			return c, nil
 		},
 		// All requests share one host, so keep as many idle connections for
 		// it as in total; the default of 2 opens a channel for most requests

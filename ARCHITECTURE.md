@@ -168,7 +168,9 @@ Add `?subdomains=true` to include active subdomain list.
 **Endpoint:** `GET /metrics` serves the same counts and the relay's own measurements in the Prometheus text
 format (`pkg/server/metrics.go`): latency and size histograms for proxied requests, channel opens and SSH
 handshakes, results and tunnl's own answers by reason, HTTPS connections, SSH client software and negotiated
-algorithms, per-tunnel traffic per minute, and Go runtime metrics. Recording them doesn't allocate.
+algorithms, per-tunnel traffic per minute, how long pooled channels and HTTPS connections sat idle before they
+closed (and, for channels, whether the app or tunnl closed them), and Go runtime metrics. Recording them doesn't
+allocate per request.
 
 ### 5. Tunnel Registry (`pkg/server/server.go`)
 

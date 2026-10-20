@@ -11,6 +11,7 @@ import (
 	"runtime/metrics"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -307,6 +308,58 @@ func TestHTTPSConnectionMetrics(t *testing.T) {
 	}
 	if got := m.answered[answerNoTunnel].Load(); got != 3 {
 		t.Errorf("%d requests answered for want of a tunnel, want 3", got)
+	}
+
+	// Closed while idle: counted by how long it had been, then forgotten
+	if n := histogramCount(&m.httpsIdleAtClose); n != 0 {
+		t.Fatalf("%d connections counted closing while idle before any closed", n)
+	}
+	ts.Client().CloseIdleConnections()
+	waitFor(t, "the idle connection's close", func() bool { return histogramCount(&m.httpsIdleAtClose) == 1 })
+	m.httpsIdleMu.Lock()
+	tracked := len(m.httpsIdleSince)
+	m.httpsIdleMu.Unlock()
+	if tracked != 0 {
+		t.Errorf("%d closed connections still tracked as idle", tracked)
+	}
+}
+
+func TestPooledChannelCloseMetrics(t *testing.T) {
+	var appCloses atomic.Bool
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "2")
+		io.WriteString(w, "ok")
+		if !appCloses.Load() {
+			return
+		}
+		// Like Node's keep-alive timeout: the app closes the idle connection
+		w.(http.Flusher).Flush()
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			time.AfterFunc(50*time.Millisecond, func() { conn.Close() })
+		}
+	}))
+	m := &tt.srv.metrics
+	get := func() {
+		resp := tt.get(t, "/")
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+
+	// tunnl closes the pooled channel, as at its idle timeout
+	get()
+	tt.srv.GetTunnel(tt.sub).Transport().CloseIdleConnections()
+	waitFor(t, "tunnl's close of the pooled channel", func() bool { return histogramCount(&m.pooledClosed[0]) == 1 })
+
+	// The app closes it
+	appCloses.Store(true)
+	get()
+	waitFor(t, "the app's close of the pooled channel", func() bool { return histogramCount(&m.pooledClosed[1]) == 1 })
+	if idle := time.Duration(m.pooledClosed[1].sum.Load()); idle < 40*time.Millisecond || idle > 5*time.Second {
+		t.Errorf("channel idle %v when the app closed it, want about 50ms", idle)
+	}
+	if n := histogramCount(&m.pooledClosed[0]); n != 1 {
+		t.Errorf("%d pooled channels counted closed by tunnl, want 1", n)
 	}
 }
 

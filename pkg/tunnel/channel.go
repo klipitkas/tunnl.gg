@@ -3,9 +3,11 @@ package tunnel
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -77,6 +79,15 @@ func origin(ctx context.Context) (string, uint32) {
 // the slots have been full for unresponsiveAfter with no answer, Dial returns
 // ErrUnresponsive without waiting.
 func (t *Tunnel) Dial(ctx context.Context) (net.Conn, error) {
+	c, err := t.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// dial is Dial returning the channel's own type.
+func (t *Tunnel) dial(ctx context.Context) (*channelConn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -162,6 +173,16 @@ func (t *Tunnel) acquireOpen(ctx context.Context) error {
 	}
 }
 
+// ChannelObserver learns how the channels a tunnel's HTTP transport keeps
+// for reuse end, for metrics. A ChannelOpener that also implements it is
+// told about each one as it closes.
+type ChannelObserver interface {
+	// PooledChannelClosed reports a pooled channel's close: byApp if the
+	// client closed its side first, which it does when the app closes its
+	// connection, and how long no data had gone either way.
+	PooledChannelClosed(byApp bool, idle time.Duration)
+}
+
 // channelConn adapts an SSH channel to net.Conn.
 //
 // SSH channels have no deadlines, so a deadline that expires closes the
@@ -176,6 +197,32 @@ type channelConn struct {
 	closed     bool
 	readTimer  *time.Timer
 	writeTimer *time.Timer
+
+	// Set for the HTTP transport's pooled channels, before their first use
+	observer  ChannelObserver
+	lastUse   atomic.Int64 // when data last went either way, in Unix nanoseconds
+	remoteEOF atomic.Bool  // the client closed its side
+}
+
+func (c *channelConn) Read(p []byte) (int, error) {
+	n, err := c.Channel.Read(p)
+	if c.observer != nil {
+		if n > 0 {
+			c.lastUse.Store(time.Now().UnixNano())
+		}
+		if err == io.EOF {
+			c.remoteEOF.Store(true)
+		}
+	}
+	return n, err
+}
+
+func (c *channelConn) Write(p []byte) (int, error) {
+	n, err := c.Channel.Write(p)
+	if n > 0 && c.observer != nil {
+		c.lastUse.Store(time.Now().UnixNano())
+	}
+	return n, err
 }
 
 func newChannelConn(ch ssh.Channel, sub string) *channelConn {
@@ -230,6 +277,7 @@ func (c *channelConn) resetTimer(timer *time.Timer, t time.Time) *time.Timer {
 
 func (c *channelConn) Close() error {
 	c.mu.Lock()
+	first := !c.closed
 	c.closed = true // deadline setters must not rearm timers after cleanup
 	for _, timer := range []*time.Timer{c.readTimer, c.writeTimer} {
 		if timer != nil {
@@ -237,6 +285,9 @@ func (c *channelConn) Close() error {
 		}
 	}
 	c.mu.Unlock()
+	if first && c.observer != nil {
+		c.observer.PooledChannelClosed(c.remoteEOF.Load(), time.Since(time.Unix(0, c.lastUse.Load())))
+	}
 	return c.Channel.Close()
 }
 

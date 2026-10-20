@@ -47,6 +47,15 @@ type relayMetrics struct {
 	channelOpenTime histogram
 	channelRefused  atomic.Uint64 // the client refused, e.g. nothing listens on its local port
 	channelFailed   atomic.Uint64 // other failures, e.g. the connection closed
+	// Pooled channels by how long they were idle when they closed, closed
+	// [by tunnl, by the app]
+	pooledClosed [2]histogram
+
+	// HTTPS connections by how long they were idle when they closed. Idle
+	// ones are tracked from HTTPSConnState: since when, in Unix nanoseconds.
+	httpsIdleAtClose histogram
+	httpsIdleMu      sync.Mutex
+	httpsIdleSince   map[net.Conn]int64
 
 	// WebSockets
 	wsRelayed, wsDialFailed atomic.Uint64
@@ -72,6 +81,9 @@ var (
 	sizeBuckets    = []int64{0, 256, 1 << 10, 4 << 10, 16 << 10, 64 << 10, 256 << 10, 1 << 20, 4 << 20, 16 << 20, 64 << 20, 128 << 20}
 	// WebSockets last up to their 2-hour idle timeout
 	sessionBuckets = []int64{1e9, 10e9, 60e9, 300e9, 900e9, 1800e9, 3600e9, 7200e9}
+	// Idle connections, around the timeouts that may close them: Node's 5s
+	// keep-alive in a tunneled app, the tunnel pool's 90s, HTTPS's 120s
+	idleBuckets = []int64{100e6, 1e9, 4e9, 6e9, 15e9, 30e9, 60e9, 85e9, 95e9, 115e9, 125e9, 300e9, 900e9}
 	// Requests per tunnel per minute; 3,000 is a tunnel's sustained rate limit
 	rateBuckets = []int64{0, 1, 2, 5, 10, 30, 60, 300, 600, 1500, 3000, 6000}
 )
@@ -200,13 +212,40 @@ func (s *Server) HTTPSConnContext(ctx context.Context, _ net.Conn) context.Conte
 	return context.WithValue(ctx, httpsConnKey{}, &httpsConn{})
 }
 
-func (s *Server) HTTPSConnState(_ net.Conn, state http.ConnState) {
+func (s *Server) HTTPSConnState(conn net.Conn, state http.ConnState) {
 	switch state {
 	case http.StateNew:
 		s.metrics.httpsOpened.Add(1)
-	case http.StateClosed, http.StateHijacked:
+	case http.StateIdle:
+		s.metrics.httpsIdle(conn, true)
+	case http.StateActive:
+		s.metrics.httpsIdle(conn, false)
+	case http.StateHijacked:
+		s.metrics.httpsIdle(conn, false)
+		s.metrics.httpsClosed.Add(1)
+	case http.StateClosed:
+		if since := s.metrics.httpsIdle(conn, false); since != 0 {
+			s.metrics.httpsIdleAtClose.observe(idleBuckets, time.Now().UnixNano()-since)
+		}
 		s.metrics.httpsClosed.Add(1)
 	}
+}
+
+// httpsIdle records whether conn is idle, and returns since when it was idle
+// before, or 0 if it wasn't.
+func (m *relayMetrics) httpsIdle(conn net.Conn, idle bool) (since int64) {
+	m.httpsIdleMu.Lock()
+	defer m.httpsIdleMu.Unlock()
+	since = m.httpsIdleSince[conn]
+	if idle {
+		if m.httpsIdleSince == nil {
+			m.httpsIdleSince = make(map[net.Conn]int64)
+		}
+		m.httpsIdleSince[conn] = time.Now().UnixNano()
+	} else if since != 0 {
+		delete(m.httpsIdleSince, conn)
+	}
+	return since
 }
 
 // countRequest counts a tunnel request by protocol, and its connection if
@@ -238,6 +277,15 @@ func (o timedOpener) OpenChannel(name string, data []byte) (ssh.Channel, <-chan 
 	ch, reqs, err := o.ChannelOpener.OpenChannel(name, data)
 	o.m.channelOpened(time.Since(start), err)
 	return ch, reqs, err
+}
+
+// PooledChannelClosed implements tunnel.ChannelObserver.
+func (o timedOpener) PooledChannelClosed(byApp bool, idle time.Duration) {
+	i := 0
+	if byApp {
+		i = 1
+	}
+	o.m.pooledClosed[i].observe(idleBuckets, int64(idle))
 }
 
 func (m *relayMetrics) channelOpened(took time.Duration, err error) {
@@ -476,6 +524,7 @@ func (s *Server) writeMetrics(w io.Writer) {
 			p.value("tunnl_https_connections_first_request_total", "protocol="+label(protocol)+",resumed="+label(r), m.httpsFirst[h2][resumed].Load())
 		}
 	}
+	p.histogram("tunnl_https_connection_idle_at_close_seconds", "HTTPS connections that closed while idle, by how long they had been idle; about 120s is the server's idle timeout.", &m.httpsIdleAtClose, idleBuckets, 1e9)
 	p.header("tunnl_https_requests_total", "counter", "Tunnel requests by protocol.")
 	for h2, protocol := range protocols {
 		p.value("tunnl_https_requests_total", "protocol="+label(protocol), m.httpsRequests[h2].Load())
@@ -498,6 +547,8 @@ func (s *Server) writeMetrics(w io.Writer) {
 	p.header("tunnl_channel_open_failures_total", "counter", "Channel opens that failed, by reason.")
 	p.value("tunnl_channel_open_failures_total", `reason="refused"`, m.channelRefused.Load())
 	p.value("tunnl_channel_open_failures_total", `reason="failed"`, m.channelFailed.Load())
+	p.histogram("tunnl_pooled_channel_closed_by_tunnl_idle_seconds", "Channels kept for reuse that tunnl closed, by how long they were idle: about 90s is the pool's idle timeout, about 0 a full pool or a failed request.", &m.pooledClosed[0], idleBuckets, 1e9)
+	p.histogram("tunnl_pooled_channel_closed_by_app_idle_seconds", "Channels kept for reuse that the tunnel client closed, when the app closed its connection, by how long they were idle.", &m.pooledClosed[1], idleBuckets, 1e9)
 
 	p.header("tunnl_websockets_total", "counter", "WebSocket upgrades relayed to the app, and those whose channel failed.")
 	p.value("tunnl_websockets_total", `result="relayed"`, m.wsRelayed.Load())
