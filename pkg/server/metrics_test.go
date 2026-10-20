@@ -186,6 +186,7 @@ func TestRequestResult(t *testing.T) {
 		{http.StatusOK, nil, true, resultCutOff},
 		{http.StatusBadGateway, &ssh.OpenChannelError{Reason: ssh.ConnectionFailed, Message: "Connection refused"}, false, resultAppRefused},
 		{http.StatusBadGateway, fmt.Errorf("dial: %w", context.DeadlineExceeded), false, resultDialTimeout},
+		{http.StatusBadGateway, fmt.Errorf("dial: %w", tunnel.ErrUnresponsive), false, resultUnresponsive},
 		{http.StatusBadGateway, context.Canceled, false, resultCanceled},
 		{http.StatusBadGateway, fmt.Errorf("%w: 200000000 bytes", errResponseTooLarge), false, resultTooLarge},
 		{http.StatusBadGateway, io.ErrUnexpectedEOF, false, resultError},

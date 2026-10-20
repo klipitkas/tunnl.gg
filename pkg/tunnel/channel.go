@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strconv"
 	"sync"
@@ -27,6 +28,18 @@ type forwardedTCPPayload struct {
 
 // dialTimeout bounds how long opening a channel to the client may take.
 const dialTimeout = 10 * time.Second
+
+// unresponsiveAfter is how long a client may hold every channel-open slot
+// without answering one before Dial stops waiting for a slot. A request that
+// got the next slot later than this would still need its own open answered,
+// so at that pace it couldn't finish within dialTimeout anyway.
+const unresponsiveAfter = dialTimeout / 2
+
+// ErrUnresponsive is returned by Dial when the client holds every
+// channel-open slot and has answered none of them for a while. The client
+// most likely went away; requests fail at once until it answers or its
+// connection closes, instead of each waiting out the dial timeout.
+var ErrUnresponsive = errors.New("tunnel client isn't answering channel opens")
 
 type originKey struct{}
 
@@ -60,7 +73,9 @@ func origin(ctx context.Context) (string, uint32) {
 // client never answers stays pending until the SSH connection closes. Each
 // pending open holds one of MaxPendingChannelOpens slots. When all are taken,
 // Dial waits for a slot until its deadline: bursts queue briefly, while a
-// client that ignores opens can't make the server accumulate goroutines.
+// client that ignores opens can't make the server accumulate goroutines. Once
+// the slots have been full for unresponsiveAfter with no answer, Dial returns
+// ErrUnresponsive without waiting.
 func (t *Tunnel) Dial(ctx context.Context) (net.Conn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -69,11 +84,10 @@ func (t *Tunnel) Dial(ctx context.Context) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 
-	select {
-	case t.pendingOpens <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	if err := t.acquireOpen(ctx); err != nil {
+		return nil, err
 	}
+	t.lastOpenProgress.Store(time.Now().UnixNano())
 
 	payload := ssh.Marshal(&forwardedTCPPayload{
 		Addr:       t.BindAddr,
@@ -91,6 +105,9 @@ func (t *Tunnel) Dial(ctx context.Context) (net.Conn, error) {
 	done := make(chan result)
 	go func() {
 		ch, reqs, err := t.opener.OpenChannel("forwarded-tcpip", payload)
+		// Record the answer before freeing the slot, so a request waiting
+		// for it never finds a free slot alongside stale progress
+		t.lastOpenProgress.Store(time.Now().UnixNano())
 		<-t.pendingOpens // the client answered, or the connection closed
 		if err == nil {
 			go ssh.DiscardRequests(reqs)
@@ -112,6 +129,36 @@ func (t *Tunnel) Dial(ctx context.Context) (net.Conn, error) {
 		return newChannelConn(res.ch, t.Subdomain), nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+}
+
+// acquireOpen takes a channel-open slot, waiting for one if all are taken.
+// With every slot taken, it returns ErrUnresponsive once nothing has moved for
+// t.unresponsiveAfter: no open answered and none sent. Counting opens sent
+// keeps a burst into an idle tunnel from failing before the client could
+// answer any of it.
+func (t *Tunnel) acquireOpen(ctx context.Context) error {
+	select {
+	case t.pendingOpens <- struct{}{}:
+		return nil
+	default:
+	}
+	for {
+		wait := t.unresponsiveAfter - time.Since(time.Unix(0, t.lastOpenProgress.Load()))
+		if wait <= 0 {
+			return ErrUnresponsive
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case t.pendingOpens <- struct{}{}:
+			timer.Stop()
+			return nil
+		case <-timer.C:
+			// Look again: an answer or another open may have moved progress on
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
 	}
 }
 

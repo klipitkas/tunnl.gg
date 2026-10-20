@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/klipitkas/tunnl.gg/pkg/config"
@@ -37,6 +38,10 @@ type Tunnel struct {
 	optsReady      chan struct{}     // closed once opts are final or the tunnel closes; nil if never awaited
 	releaseOnce    sync.Once
 	closed         bool
+
+	// For failing fast once the client stops answering; see acquireOpen
+	lastOpenProgress  atomic.Int64  // when a channel open was last sent or answered, in Unix nanoseconds
+	unresponsiveAfter time.Duration // tests shorten it
 }
 
 // New creates a new tunnel that forwards traffic to the client over opener
@@ -64,6 +69,7 @@ func New(subdomain string, opener ChannelOpener, bindAddr string, bindPort uint3
 			config.MaxTrackedVisitors,
 		),
 	}
+	t.unresponsiveAfter = unresponsiveAfter
 	t.transport = &http.Transport{
 		// Every request goes to the client over an SSH channel, whatever the URL
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {

@@ -384,6 +384,8 @@ func describeProxyError(err error) string {
 		return "your local app didn't accept the connection: " + strings.ToLower(reason)
 	case errors.Is(err, errResponseTooLarge):
 		return fmt.Sprintf("response larger than %s, not sent", tunnel.FormatBytes(config.MaxResponseBodySize))
+	case errors.Is(err, tunnel.ErrUnresponsive):
+		return "your SSH client stopped answering, so requests fail at once until it answers again"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "your SSH client didn't connect to your local app in time"
 	case errors.Is(err, context.Canceled):

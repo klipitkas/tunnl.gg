@@ -211,7 +211,8 @@ their random or stable URL; a name they give is ignored, and the banner says so.
 | WebSocket idle timeout | 2 hours | |
 | SSH connections | 10 per minute per IP | New connections |
 | SSH handshakes | 3 per IP, 100 total; 30 second timeout | In progress at once; excess connections are dropped |
-| Unanswered channel opens | 32 per tunnel | Connections the SSH client hasn't accepted yet; further requests wait up to 10 seconds |
+| Unanswered channel opens | 32 per tunnel | Connections the SSH client hasn't accepted yet; further requests wait up to 10 seconds, or get 502 at once if the client has answered none for 5 seconds |
+| SSH keepalive | 45 seconds | The connection closes after 45 seconds with nothing from the client; the server asks for a reply after 15 quiet seconds |
 | Abuse blocks | 1 hour, after 10 violations | Temporary IP block after repeated SSH rate limit violations |
 
 Browsers see a warning page before reaching a tunnel (once a day), to protect them from

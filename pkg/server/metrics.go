@@ -56,6 +56,7 @@ type relayMetrics struct {
 	// SSH clients
 	sshHandshakeTime histogram
 	sshFailures      [numSSHFailures]atomic.Uint64
+	keepAliveCloses  atomic.Uint64 // connections closed for silence; see keepAlive
 	sshMu            sync.Mutex
 	sshClients       map[sshClientKey]uint64
 
@@ -128,18 +129,19 @@ const (
 	result2xx
 	result3xx
 	result4xx
-	result5xx         // the app's own 5xx; tunnl's are the results below
-	resultAppRefused  // the tunnel client couldn't connect to its local app
-	resultDialTimeout // the tunnel client didn't answer the channel open in time
-	resultCanceled    // the visitor left, or the request went idle, before a response
-	resultTooLarge    // the response was over the size limit
-	resultCutOff      // the response stopped partway
-	resultError       // anything else, e.g. the app closed the connection
+	result5xx          // the app's own 5xx; tunnl's are the results below
+	resultAppRefused   // the tunnel client couldn't connect to its local app
+	resultDialTimeout  // the tunnel client didn't answer the channel open in time
+	resultUnresponsive // the tunnel client had stopped answering channel opens
+	resultCanceled     // the visitor left, or the request went idle, before a response
+	resultTooLarge     // the response was over the size limit
+	resultCutOff       // the response stopped partway
+	resultError        // anything else, e.g. the app closed the connection
 	numResults
 )
 
 var resultNames = [numResults]string{"1xx", "2xx", "3xx", "4xx", "5xx",
-	"app_refused", "dial_timeout", "canceled", "too_large", "cut_off", "error"}
+	"app_refused", "dial_timeout", "unresponsive", "canceled", "too_large", "cut_off", "error"}
 
 // requestResult classifies a proxied request by the status the app answered
 // with, or by the error that kept its response from the visitor. It matches
@@ -160,6 +162,8 @@ func requestResult(status int, err error, cutOff bool) int {
 		return resultAppRefused
 	case errors.Is(err, errResponseTooLarge):
 		return resultTooLarge
+	case errors.Is(err, tunnel.ErrUnresponsive):
+		return resultUnresponsive
 	case errors.Is(err, context.DeadlineExceeded):
 		return resultDialTimeout
 	case errors.Is(err, context.Canceled):
@@ -524,6 +528,7 @@ func (s *Server) writeMetrics(w io.Writer) {
 	for i, name := range sshFailureNames {
 		p.value("tunnl_ssh_handshake_failures_total", "reason="+label(name), m.sshFailures[i].Load())
 	}
+	p.single("tunnl_ssh_keepalive_closes_total", "counter", "SSH connections closed because nothing came from the client for the keepalive timeout.", m.keepAliveCloses.Load())
 
 	p.histogram("tunnl_tunnel_requests_per_minute", "Every open tunnel's requests in each whole minute.", &m.tunnelRequests, rateBuckets, 1)
 	p.histogram("tunnl_tunnel_response_bytes_per_minute", "Every open tunnel's response body bytes in each whole minute.", &m.tunnelBytes, sizeBuckets, 1)

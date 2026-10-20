@@ -18,6 +18,13 @@ const (
 	MaxHandshakesPerIP      = 3   // concurrent in-progress SSH handshakes per IP
 	MaxConcurrentHandshakes = 100 // concurrent in-progress SSH handshakes server-wide
 
+	// SSH keepalives. A client the server hasn't heard from for the interval
+	// is sent a keepalive request, and its connection is closed once nothing
+	// has come from it for the timeout: a vanished client would otherwise
+	// hold its tunnel until TCP gives up, about 15 minutes.
+	SSHKeepAliveInterval = 15 * time.Second
+	SSHKeepAliveTimeout  = 45 * time.Second
+
 	// HTTP rate limiting. Exceeding a limit only returns 429 to the visitor; it
 	// never penalizes the tunnel owner, since visitors control the request rate.
 	// Bursts are sized for dev servers that load a page as hundreds of modules.
@@ -80,7 +87,8 @@ const (
 	MaxWebSocketsPerVisitor = 20                 // concurrent WebSockets per visitor IP across all tunnels
 
 	// Channel opens to a tunnel client that it hasn't answered yet. Past this,
-	// requests wait for the client to answer (up to the 10s dial timeout).
+	// requests wait for the client to answer (up to the 10s dial timeout), or
+	// fail at once if it has answered nothing for 5s.
 	MaxPendingChannelOpens = 32
 
 	// Request logging

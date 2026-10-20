@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -45,7 +46,8 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	// Do SSH handshake first so we can send error messages to the client
 	handshakeStart := time.Now()
 	conn.SetDeadline(handshakeStart.Add(config.SSHHandshakeTimeout))
-	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.sshConfig)
+	heard := newHeardConn(conn)
+	sshConn, chans, reqs, err := ssh.NewServerConn(heard, s.sshConfig)
 	s.endHandshake(clientIP)
 	if err != nil {
 		s.metrics.sshFailed(err)
@@ -116,6 +118,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go s.keepAlive(ctx, sshConn, heard)
 
 	// Handle global requests (port forwarding)
 	go func() {
@@ -356,6 +359,74 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	}
 
 	log.Printf("SSH connection closed for subdomain: %s", sub)
+}
+
+// heardConn records when data last arrived from the client.
+type heardConn struct {
+	net.Conn
+	last atomic.Int64 // Unix nanoseconds
+}
+
+func newHeardConn(conn net.Conn) *heardConn {
+	c := &heardConn{Conn: conn}
+	c.last.Store(time.Now().UnixNano())
+	return c
+}
+
+func (c *heardConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.last.Store(time.Now().UnixNano())
+	}
+	return n, err
+}
+
+// quiet returns how long nothing has arrived from the client.
+func (c *heardConn) quiet() time.Duration {
+	return time.Since(time.Unix(0, c.last.Load()))
+}
+
+// keepAlive closes conn once nothing has come from the client for
+// s.keepAliveTimeout, until ctx ends. A client quiet for s.keepAliveInterval
+// is sent a keepalive request, which a live client answers, if only to
+// refuse it. Anything from the client counts, not just that answer: one busy
+// receiving over a slow link sends window adjustments, while its answer can
+// queue behind the data on its way to it.
+//
+// Closing the connection also ends writes stuck on it, like those to a client
+// whose kernel still acknowledges data but whose ssh stopped reading. They
+// hold the connection's write lock, which every other channel waits for.
+func (s *Server) keepAlive(ctx context.Context, conn ssh.Conn, heard *heardConn) {
+	ticker := time.NewTicker(s.keepAliveInterval)
+	defer ticker.Stop()
+	probing := make(chan struct{}, 1) // one keepalive request at a time
+	for {
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return
+		}
+		quiet := heard.quiet()
+		if quiet >= s.keepAliveTimeout {
+			log.Printf("Closing SSH connection from %s: nothing received for %s", conn.RemoteAddr(), quiet.Round(time.Second))
+			s.metrics.keepAliveCloses.Add(1)
+			conn.Close()
+			return
+		}
+		if quiet < s.keepAliveInterval {
+			continue
+		}
+		select {
+		case probing <- struct{}{}:
+			// The request waits behind any write stuck on the connection,
+			// so it has its own goroutine; closing the connection ends it
+			go func() {
+				conn.SendRequest("keepalive@openssh.com", true, nil)
+				<-probing
+			}()
+		default:
+		}
+	}
 }
 
 // lifetimeWarning is how long before the lifetime limit the user is warned.

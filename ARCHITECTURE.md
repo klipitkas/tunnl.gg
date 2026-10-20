@@ -95,6 +95,9 @@ Listens on port 22 (configurable) and handles remote port forwarding requests.
 5. Server registers tunnel in registry when the client sends its `tcpip-forward` request
 6. Server sends URL to client via session channel
 7. For each proxied connection, the server opens a `forwarded-tcpip` channel to the client
+8. A client the server hasn't heard from for 15s is sent a `keepalive@openssh.com` request, which any live client
+   answers; its connection closes once nothing has come from it for 45s. Anything from the client counts, so one
+   busy receiving over a slow link isn't closed while its answer waits behind the data on its way to it
 
 **Key structures:**
 
@@ -133,7 +136,8 @@ Listens on port 443 with pre-configured TLS certificates.
 6. Show interstitial warning for browser requests (first visit)
 7. Handle WebSocket upgrade if requested
 8. Reverse proxy request to the client over a new `forwarded-tcpip` SSH channel (no local listener or socket).
-   At most 32 channel opens per tunnel can await the client's answer; further requests wait for one (up to the 10s dial timeout).
+   At most 32 channel opens per tunnel can await the client's answer; further requests wait for one (up to the 10s dial timeout),
+   or get 502 at once if the client has answered none of them for 5s.
 10. SSH client forwards to local application
 
 ### 4. Stats Server (`pkg/server/stats.go`)

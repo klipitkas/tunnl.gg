@@ -253,3 +253,104 @@ func TestDial_WaitsForSlotWhenOpensUnanswered(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// fillSlots starts a Dial for every channel-open slot, each giving up after
+// wait while its open stays pending.
+func fillSlots(tun *Tunnel, wait time.Duration) {
+	var wg sync.WaitGroup
+	for i := 0; i < config.MaxPendingChannelOpens; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), wait)
+			defer cancel()
+			tun.Dial(ctx)
+		}()
+	}
+	wg.Wait()
+}
+
+func TestDial_FailsFastOnceClientStopsAnswering(t *testing.T) {
+	opener := &fakeOpener{release: make(chan struct{})}
+	defer close(opener.release)
+	tun := New("happy-tiger-00000001", opener, "localhost", 8080, "192.0.2.1")
+	tun.unresponsiveAfter = 200 * time.Millisecond
+
+	// A burst into a tunnel idle for longer than that still waits: the
+	// client hasn't had time to answer it
+	time.Sleep(300 * time.Millisecond)
+	fillSlots(tun, 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := tun.Dial(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Dial() right after the burst: error = %v, want context deadline exceeded", err)
+	}
+
+	// Once the client has answered nothing for that long, Dial fails at once
+	// rather than waiting out its deadline
+	time.Sleep(200 * time.Millisecond)
+	start := time.Now()
+	if _, err := tun.Dial(context.Background()); !errors.Is(err, ErrUnresponsive) {
+		t.Fatalf("Dial() error = %v, want ErrUnresponsive", err)
+	}
+	if took := time.Since(start); took > 100*time.Millisecond {
+		t.Errorf("Dial() took %v to fail, want no wait", took)
+	}
+
+	// A request already waiting for a slot gives up at the same point
+	tun = New("happy-tiger-00000002", opener, "localhost", 8080, "192.0.2.1")
+	tun.unresponsiveAfter = 200 * time.Millisecond
+	fillSlots(tun, 20*time.Millisecond)
+	start = time.Now()
+	if _, err := tun.Dial(context.Background()); !errors.Is(err, ErrUnresponsive) {
+		t.Fatalf("waiting Dial() error = %v, want ErrUnresponsive", err)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("waiting Dial() took %v, want about 200ms", took)
+	}
+}
+
+func TestDial_KeepsWaitingWhileClientAnswers(t *testing.T) {
+	opener := &fakeOpener{release: make(chan struct{})}
+	tun := New("happy-tiger-00000001", opener, "localhost", 8080, "192.0.2.1")
+	tun.unresponsiveAfter = 150 * time.Millisecond
+
+	// The client answers one open every 40ms, slower than requests arrive,
+	// so requests wait for slots longer than unresponsiveAfter in total
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-time.After(40 * time.Millisecond):
+			case <-stop:
+				return
+			}
+			select {
+			case opener.release <- struct{}{}:
+			case <-stop:
+				return
+			}
+		}
+	}()
+	fillSlots(tun, 20*time.Millisecond)
+
+	const waiting = 8
+	errs := make(chan error, waiting)
+	for i := 0; i < waiting; i++ {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			conn, err := tun.Dial(ctx)
+			if err == nil {
+				conn.Close()
+			}
+			errs <- err
+		}()
+	}
+	for i := 0; i < waiting; i++ {
+		if err := <-errs; err != nil {
+			t.Errorf("Dial() while the client keeps answering: %v", err)
+		}
+	}
+}

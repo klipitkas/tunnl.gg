@@ -68,6 +68,9 @@ type Server struct {
 	clientIPs     *clientip.Resolver // resolves visitors behind trusted proxies
 	// in-progress SSH handshakes server-wide, all under the single key ""
 	allHandshakes *connLimiter
+
+	// See config.SSHKeepAliveInterval; tests shorten them
+	keepAliveInterval, keepAliveTimeout time.Duration
 }
 
 // New creates a new server instance
@@ -92,6 +95,7 @@ func New(hostKeyPath string, domain string) (*Server, error) {
 		samplerStop:     make(chan struct{}),
 		domain:          domain,
 	}
+	s.keepAliveInterval, s.keepAliveTimeout = config.SSHKeepAliveInterval, config.SSHKeepAliveTimeout
 	go s.sampleTunnelsEvery(tunnelSampleInterval, s.samplerStop)
 
 	// Set callback to close SSH connections when IP is blocked

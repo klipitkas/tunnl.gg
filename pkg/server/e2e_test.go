@@ -57,7 +57,13 @@ var publicURLPattern = regexp.MustCompile(`https://([a-z0-9-]+)\.`)
 func startSSHServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	srv := newTestServer(t)
+	return srv, serveSSH(t, srv)
+}
 
+// serveSSH accepts SSH connections for srv and returns their address. Set
+// srv's fields before calling it, since connections read them.
+func serveSSH(t *testing.T, srv *Server) string {
+	t.Helper()
 	sshLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Listen() error: %v", err)
@@ -72,7 +78,7 @@ func startSSHServer(t *testing.T) (*Server, string) {
 			go srv.HandleSSHConnection(conn)
 		}
 	}()
-	return srv, sshLn.Addr().String()
+	return sshLn.Addr().String()
 }
 
 // anonymousClient is how most clients connect: no key, any username.
