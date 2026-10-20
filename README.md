@@ -73,6 +73,17 @@ tunnl prints the public URL and a QR code, then logs requests as they arrive. Pr
 Ctrl+C to stop. The `-t` flag gives the session a terminal, which the server needs to show
 the URL (for scripts, see [JSON output](#json-output-for-scripts-and-agents)).
 
+The first time you connect, ssh asks you to confirm the server's host key. The ED25519 key
+of `proxy.tunnl.gg` is:
+
+```
+SHA256:5uQ6VobmUpY4wyMmm5jnAwFtt3aX06WYDDM4ER+2WUw
+```
+
+It's also published as a DNSSEC-signed SSHFP record, so ssh can check it for you: add
+`-o VerifyHostKeyDNS=yes`. With a resolver that validates DNSSEC, ssh then accepts the key
+without asking.
+
 ## Keep the same URL
 
 Each connection gets a new random URL. Connect as `stable` instead, and the URL is tied to
