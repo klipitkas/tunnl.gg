@@ -77,9 +77,10 @@ dev: build-dev
 test:
 	$(GOTEST) -v ./...
 
-# Run linters (requires golangci-lint v2)
+# Run linters at CI's version (.github/workflows/ci.yml), whatever is installed
+GOLANGCI_LINT_VERSION := v2.14.0
 lint:
-	golangci-lint run ./...
+	$(GOCMD) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
 
 # Check for known vulnerabilities in reachable code
 vuln:

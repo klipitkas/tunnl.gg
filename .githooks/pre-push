@@ -1,0 +1,9 @@
+#!/bin/sh
+# Runs before every push: CI's lint, then the tests, so a push that would
+# turn CI red fails here first. Enable it once per clone:
+#   git config core.hooksPath .githooks
+# Skip it for one push with: git push --no-verify
+set -e
+cd "$(git rev-parse --show-toplevel)"
+make lint
+go test ./...

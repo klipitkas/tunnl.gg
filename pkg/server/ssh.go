@@ -421,7 +421,8 @@ func (s *Server) keepAlive(ctx context.Context, conn ssh.Conn, heard *heardConn)
 			// The request waits behind any write stuck on the connection,
 			// so it has its own goroutine; closing the connection ends it
 			go func() {
-				conn.SendRequest("keepalive@openssh.com", true, nil)
+				// Only the traffic matters, not the answer or an error
+				_, _, _ = conn.SendRequest("keepalive@openssh.com", true, nil)
 				<-probing
 			}()
 		default:
