@@ -14,23 +14,28 @@ import (
 // goes idleTimeout without progress in either direction. Long polls, streaming
 // responses and slow uploads can run as long as they keep making progress.
 type proxyDeadlines struct {
-	rc          *http.ResponseController
+	http.ResponseWriter
+	rc          http.ResponseController
+	body        deadlineBody
 	idleTimeout time.Duration
 	watchdog    *time.Timer
 	cancel      context.CancelFunc
 }
 
-// newProxyDeadlines applies idle timeouts to r and w. It returns the request
-// and response writer to proxy with, and a stop function to call when done.
+// newProxyDeadlines applies idle timeouts to r and w. It returns the response
+// writer and request to proxy with. Call the writer's stop method when done.
 // Accept the composed context separately so origin metadata and cancellation
 // only require one request copy.
-func newProxyDeadlines(ctx context.Context, w http.ResponseWriter, r *http.Request, idleTimeout time.Duration) (http.ResponseWriter, *http.Request, func()) {
+func newProxyDeadlines(ctx context.Context, w http.ResponseWriter, r *http.Request, idleTimeout time.Duration) (*proxyDeadlines, *http.Request) {
 	ctx, cancel := context.WithCancel(ctx)
+	// The writer, controller and optional body wrapper share this request's
+	// lifetime. Keep them in one allocation; none of this state is pooled.
 	d := &proxyDeadlines{
-		rc:          http.NewResponseController(w),
-		idleTimeout: idleTimeout,
-		watchdog:    time.AfterFunc(idleTimeout, cancel),
-		cancel:      cancel,
+		ResponseWriter: w,
+		rc:             *http.NewResponseController(w),
+		idleTimeout:    idleTimeout,
+		watchdog:       time.AfterFunc(idleTimeout, cancel),
+		cancel:         cancel,
 	}
 
 	r = r.WithContext(ctx)
@@ -40,14 +45,16 @@ func newProxyDeadlines(ctx context.Context, w http.ResponseWriter, r *http.Reque
 		d.clearReadDeadline()
 	} else {
 		d.extendRead()
-		r.Body = &deadlineBody{ReadCloser: r.Body, d: d}
+		d.body = deadlineBody{ReadCloser: r.Body, d: d}
+		r.Body = &d.body
 	}
 
-	stop := func() {
-		d.watchdog.Stop()
-		cancel()
-	}
-	return &deadlineWriter{ResponseWriter: w, d: d}, r, stop
+	return d, r
+}
+
+func (d *proxyDeadlines) stop() {
+	d.watchdog.Stop()
+	d.cancel()
 }
 
 // Deadline errors are ignored: they only fail for writers that don't support
@@ -83,23 +90,17 @@ func (b *deadlineBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// deadlineWriter extends the write deadline before each write of the response.
-type deadlineWriter struct {
-	http.ResponseWriter
-	d *proxyDeadlines
+func (d *proxyDeadlines) WriteHeader(code int) {
+	d.extendWrite()
+	d.ResponseWriter.WriteHeader(code)
 }
 
-func (w *deadlineWriter) WriteHeader(code int) {
-	w.d.extendWrite()
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func (w *deadlineWriter) Write(b []byte) (int, error) {
-	w.d.extendWrite()
-	return w.ResponseWriter.Write(b)
+func (d *proxyDeadlines) Write(b []byte) (int, error) {
+	d.extendWrite()
+	return d.ResponseWriter.Write(b)
 }
 
 // Unwrap returns the underlying ResponseWriter for interface passthrough (e.g., http.Flusher).
-func (w *deadlineWriter) Unwrap() http.ResponseWriter {
-	return w.ResponseWriter
+func (d *proxyDeadlines) Unwrap() http.ResponseWriter {
+	return d.ResponseWriter
 }

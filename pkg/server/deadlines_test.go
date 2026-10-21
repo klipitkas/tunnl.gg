@@ -13,8 +13,8 @@ func TestProxyDeadlinesPreservesContextAndCancellation(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	ctx, cancel := context.WithCancel(context.WithValue(req.Context(), key{}, "origin"))
 	defer cancel()
-	_, proxied, stop := newProxyDeadlines(ctx, httptest.NewRecorder(), req, time.Minute)
-	defer stop()
+	w, proxied := newProxyDeadlines(ctx, httptest.NewRecorder(), req, time.Minute)
+	defer w.stop()
 	if proxied.Context().Value(key{}) != "origin" || req.Context().Value(key{}) != nil {
 		t.Fatal("composed context was lost or the original request was changed")
 	}
@@ -28,8 +28,8 @@ func TestProxyDeadlinesPreservesContextAndCancellation(t *testing.T) {
 
 func TestProxyDeadlines_CancelsIdleRequest(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	_, r, stop := newProxyDeadlines(req.Context(), httptest.NewRecorder(), req, 50*time.Millisecond)
-	defer stop()
+	w, r := newProxyDeadlines(req.Context(), httptest.NewRecorder(), req, 50*time.Millisecond)
+	defer w.stop()
 
 	select {
 	case <-r.Context().Done():
@@ -40,8 +40,8 @@ func TestProxyDeadlines_CancelsIdleRequest(t *testing.T) {
 
 func TestProxyDeadlines_ProgressKeepsRequestAlive(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	w, r, stop := newProxyDeadlines(req.Context(), httptest.NewRecorder(), req, 100*time.Millisecond)
-	defer stop()
+	w, r := newProxyDeadlines(req.Context(), httptest.NewRecorder(), req, 100*time.Millisecond)
+	defer w.stop()
 
 	// Write for well past the idle timeout, never pausing for longer than it
 	for i := 0; i < 10; i++ {

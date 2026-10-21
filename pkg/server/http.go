@@ -216,8 +216,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body = in
 	}
 	ctx := tunnel.WithOrigin(r.Context(), originAddr(client.Addr, visitorIP, r.RemoteAddr))
-	dw, r, stopDeadlines := newProxyDeadlines(ctx, w, r, config.ProxyIdleTimeout)
-	defer stopDeadlines()
+	dw, r := newProxyDeadlines(ctx, w, r, config.ProxyIdleTimeout)
+	defer dw.stop()
 	sw := &statusCaptureWriter{ResponseWriter: dw}
 
 	// The tunneled app decides its own response headers; CORS ones are added
