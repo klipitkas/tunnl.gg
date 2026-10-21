@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klipitkas/tunnl.gg/pkg/clientip"
 	"github.com/klipitkas/tunnl.gg/pkg/config"
 	"github.com/klipitkas/tunnl.gg/pkg/tunnel"
 )
@@ -22,9 +23,11 @@ func BenchmarkRequestAllocations(b *testing.B) {
 		upload, response int
 		inspect, missing bool
 		ipv4             bool
+		forwarded        bool
 	}{
 		{name: "GET1KiB", response: 1024},
 		{name: "GET1KiBIPv4", response: 1024, ipv4: true},
+		{name: "GET1KiBTrustedProxy", response: 1024, forwarded: true},
 		{name: "GET64KiB", response: 65536},
 		{name: "Upload16KiB", upload: 16384, response: 1024},
 		{name: "Inspected16KiB", response: 16384, inspect: true},
@@ -35,6 +38,13 @@ func BenchmarkRequestAllocations(b *testing.B) {
 			s := &Server{domain: config.DefaultDomain, tunnels: make(map[string]*tunnel.Tunnel),
 				reqPerVisitor: newConnLimiter(config.MaxInFlightPerVisitor),
 				reqPerTunnel:  newConnLimiter(config.MaxInFlightPerTunnel)}
+			if tc.forwarded {
+				var err error
+				s.clientIPs, err = clientip.Parse("10.0.0.0/8")
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
 			payload := make([]byte, tc.response)
 			upload := make([]byte, tc.upload)
 			var tun *tunnel.Tunnel
@@ -69,6 +79,10 @@ func BenchmarkRequestAllocations(b *testing.B) {
 				r.RemoteAddr = "[2001:db8:1234:5678::1]:1234"
 				if tc.ipv4 {
 					r.RemoteAddr = "198.51.100.1:1234"
+				}
+				if tc.forwarded {
+					r.RemoteAddr = "10.0.0.5:1234"
+					r.Header.Set("X-Forwarded-For", "198.51.100.1, 10.0.0.7, 10.0.0.8")
 				}
 				w := &allocationRecorder{ResponseRecorder: httptest.NewRecorder()}
 				s.ServeHTTP(w, r)

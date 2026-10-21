@@ -121,21 +121,27 @@ func (r *Resolver) Resolve(remoteAddr string, h http.Header) Result {
 // proxies, and returns the first untrusted address: entries further left were
 // written by the visitor and can't be trusted.
 func (r *Resolver) fromForwardedFor(peer netip.Addr, h http.Header) netip.Addr {
-	var hops []string
-	for _, value := range h.Values("X-Forwarded-For") {
-		hops = append(hops, strings.Split(value, ",")...)
-	}
-
 	client := peer
-	for i := len(hops) - 1; i >= 0; i-- {
-		addr := parseAddr(strings.TrimSpace(hops[i]))
-		if !addr.IsValid() {
-			// Malformed entry: nothing to its left can be trusted either
-			return client
-		}
-		client = addr
-		if !contains(r.proxies, addr) && !contains(r.cloudflare, addr) {
-			return addr
+	values := h.Values("X-Forwarded-For")
+	for i := len(values) - 1; i >= 0; i-- {
+		value := values[i]
+		for {
+			// Walk each header from the right without allocating a slice of
+			// hops or scanning the prefix beyond the first untrusted address.
+			comma := strings.LastIndexByte(value, ',')
+			addr := parseAddr(strings.TrimSpace(value[comma+1:]))
+			if !addr.IsValid() {
+				// Malformed entry: nothing to its left can be trusted either.
+				return client
+			}
+			client = addr
+			if !contains(r.proxies, addr) && !contains(r.cloudflare, addr) {
+				return addr
+			}
+			if comma < 0 {
+				break
+			}
+			value = value[:comma]
 		}
 	}
 	return client
