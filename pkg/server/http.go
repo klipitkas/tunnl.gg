@@ -700,7 +700,10 @@ func originAddr(addr netip.Addr, visitorIP, remoteAddr string) string {
 func visitorKeyAddr(addr netip.Addr) string {
 	addr = addr.Unmap()
 	if addr.Is6() && addr.Zone() == "" {
-		return netip.PrefixFrom(addr, 64).Masked().String()
+		// Format directly into stack storage to avoid an intermediate IP string.
+		// An unzoned IPv6 address plus "/64" fits in 42 bytes.
+		var buf [42]byte
+		return string(netip.PrefixFrom(addr, 64).Masked().AppendTo(buf[:0]))
 	}
 	return addr.String()
 }
