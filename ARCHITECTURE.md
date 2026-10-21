@@ -135,7 +135,10 @@ Listens on port 443 with pre-configured TLS certificates.
 5. Mark the request in flight (the tunnel can't go idle until it finishes)
 6. Show interstitial warning for browser requests (first visit)
 7. Handle WebSocket upgrade if requested
-8. Reverse proxy request to the client over a new `forwarded-tcpip` SSH channel (no local listener or socket).
+8. Reverse proxy over a pooled HTTP connection carried by a `forwarded-tcpip` SSH channel (no local listener or socket).
+   Open a new channel when no pooled connection is available. Each tunnel retains at most 32 idle channels,
+   across all HTTP host spellings, and expires them after 90 seconds idle. This is an idle retention limit,
+   not a cap on active requests; retaining a busy burst avoids repeating channel-open round trips.
    At most 32 channel opens per tunnel can await the client's answer; further requests wait for one (up to the 10s dial timeout),
    or get 502 at once if the client has answered none of them for 5s.
 10. SSH client forwards to local application

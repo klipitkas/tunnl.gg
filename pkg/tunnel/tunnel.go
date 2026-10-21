@@ -44,6 +44,11 @@ type Tunnel struct {
 	unresponsiveAfter time.Duration // tests shorten it
 }
 
+// Retain channels for another burst without repeating the SSH channel-open
+// round trip. These are already-opened channels, not preallocated connections;
+// the transport still expires them after 90 seconds idle.
+const maxIdleChannelsPerTunnel = 32
+
 // New creates a new tunnel that forwards traffic to the client over opener
 func New(subdomain string, opener ChannelOpener, bindAddr string, bindPort uint32, clientIP string) *Tunnel {
 	now := time.Now()
@@ -84,10 +89,10 @@ func New(subdomain string, opener ChannelOpener, bindAddr string, bindPort uint3
 			}
 			return c, nil
 		},
-		// All requests share one host, so keep as many idle connections for
-		// it as in total; the default of 2 opens a channel for most requests
-		MaxIdleConns:        10,
-		MaxIdleConnsPerHost: 10,
+		// Keep the same bound per host and across the whole tunnel, including
+		// requests that spell the public host differently (e.g. with a port).
+		MaxIdleConns:        maxIdleChannelsPerTunnel,
+		MaxIdleConnsPerHost: maxIdleChannelsPerTunnel,
 		IdleConnTimeout:     90 * time.Second,
 	}
 	return t
