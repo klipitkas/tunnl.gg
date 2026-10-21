@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -229,10 +230,13 @@ type requestJSON struct {
 	Note       string `json:"note,omitempty"`
 	Detail     string `json:"detail,omitempty"`
 	FromTunnl  bool   `json:"from_tunnl,omitempty"` // handled by tunnl, not your app
+
+	// Keep optional numbers in this record instead of separate heap objects.
+	bytes, durationMS int64
 }
 
-func jsonEntry(e Entry) requestJSON {
-	r := requestJSON{
+func jsonEntry(e Entry) *requestJSON {
+	r := &requestJSON{
 		Event:     "request",
 		Time:      e.Time.UTC().Format(time.RFC3339),
 		Method:    e.Method,
@@ -244,11 +248,12 @@ func jsonEntry(e Entry) requestJSON {
 		FromTunnl: e.FromTunnl,
 	}
 	if e.Bytes >= 0 && e.Status > 0 && !e.FromTunnl {
-		r.Bytes = &e.Bytes
+		r.bytes = e.Bytes
+		r.Bytes = &r.bytes
 	}
 	if e.Latency > 0 {
-		ms := e.Latency.Milliseconds()
-		r.DurationMS = &ms
+		r.durationMS = e.Latency.Milliseconds()
+		r.DurationMS = &r.durationMS
 	}
 	return r
 }
@@ -319,44 +324,77 @@ func formatEntry(e Entry) string {
 }
 
 func formatEntryTo(b *bytes.Buffer, e Entry) {
-	b.WriteString("\r" + strings.Repeat(" ", indentWidth))
-	b.WriteString(colorDim + e.Time.UTC().Format("15:04:05") + colorReset + "  ")
+	var scratch [64]byte
+	b.WriteString("\r  ")
+	b.WriteString(colorDim)
+	b.Write(e.Time.UTC().AppendFormat(scratch[:0], "15:04:05"))
+	b.WriteString(colorReset + "  ")
 
 	method := sanitizeTerminalText(e.Method)
-	b.WriteString(methodColor(method) + fmt.Sprintf("%-*s", methodWidth, method) + colorReset + "  ")
-	b.WriteString(fmt.Sprintf("%-*s", targetWidth, fitTarget(e.Target)) + "  ")
+	b.WriteString(methodColor(method))
+	writeLogColumn(b, method, methodWidth, false)
+	b.WriteString(colorReset + "  ")
+	writeLogColumn(b, fitTarget(e.Target), targetWidth, false)
+	b.WriteString("  ")
 
 	if e.Status > 0 {
-		b.WriteString(statusColor(e.Status) + fmt.Sprintf("%-*d", statusWidth, e.Status) + colorReset + "  ")
+		b.WriteString(statusColor(e.Status))
+		writeLogColumn(b, string(strconv.AppendInt(scratch[:0], int64(e.Status), 10)), statusWidth, false)
+		b.WriteString(colorReset + "  ")
 	} else {
-		b.WriteString(strings.Repeat(" ", statusWidth+2))
+		b.WriteString(logSpaces[:statusWidth+2])
 	}
 
-	size := ""
+	size := scratch[:0]
 	if e.Bytes >= 0 && e.Status > 0 && !e.FromTunnl {
-		size = formatBytes(e.Bytes)
+		size = appendLogBytes(size, e.Bytes)
 	}
-	b.WriteString(colorDim + fmt.Sprintf("%*s", sizeWidth, size) + colorReset + "  ")
+	b.WriteString(colorDim)
+	writeLogColumn(b, string(size), sizeWidth, true)
+	b.WriteString(colorReset + "  ")
 
-	latency := ""
+	latency := scratch[:0]
 	if e.Latency > 0 {
-		latency = formatLatency(e.Latency)
+		latency = appendLogLatency(latency, e.Latency)
 	}
-	b.WriteString(latencyColor(e.Latency) + fmt.Sprintf("%*s", latencyWidth, latency) + colorReset + "  ")
+	b.WriteString(latencyColor(e.Latency))
+	writeLogColumn(b, string(latency), latencyWidth, true)
+	b.WriteString(colorReset + "  ")
 
-	b.WriteString(colorDim + sanitizeTerminalText(e.Visitor) + colorReset)
+	b.WriteString(colorDim)
+	b.WriteString(sanitizeTerminalText(e.Visitor))
+	b.WriteString(colorReset)
 	if e.Note != "" {
 		noteColor := colorDim
 		if e.FromTunnl {
 			noteColor = colorMagenta
 		}
-		b.WriteString("  " + noteColor + sanitizeTerminalText(e.Note) + colorReset)
+		b.WriteString("  ")
+		b.WriteString(noteColor)
+		b.WriteString(sanitizeTerminalText(e.Note))
+		b.WriteString(colorReset)
 	}
 	b.WriteString("\r\n")
 
 	if e.Detail != "" {
-		b.WriteString("\r" + strings.Repeat(" ", indentWidth+timeWidth+2))
-		b.WriteString(colorRed + "↳ " + sanitizeTerminalText(e.Detail) + colorReset + "\r\n")
+		b.WriteString("\r" + logSpaces[:indentWidth+timeWidth+2])
+		b.WriteString(colorRed + "↳ ")
+		b.WriteString(sanitizeTerminalText(e.Detail))
+		b.WriteString(colorReset + "\r\n")
+	}
+}
+
+const logSpaces = "                                        "
+
+// Match fmt's minimum width in runes, including for non-ASCII methods.
+func writeLogColumn(b *bytes.Buffer, text string, width int, right bool) {
+	padding := max(0, width-utf8.RuneCountInString(text))
+	if right {
+		b.WriteString(logSpaces[:padding])
+	}
+	b.WriteString(text)
+	if !right {
+		b.WriteString(logSpaces[:padding])
 	}
 }
 
@@ -431,13 +469,18 @@ func latencyColor(d time.Duration) string {
 }
 
 func formatLatency(d time.Duration) string {
+	var scratch [64]byte
+	return string(appendLogLatency(scratch[:0], d))
+}
+
+func appendLogLatency(dst []byte, d time.Duration) []byte {
 	switch {
 	case d < time.Millisecond:
-		return "<1ms"
+		return append(dst, "<1ms"...)
 	case d < time.Second:
-		return fmt.Sprintf("%dms", d.Milliseconds())
+		return append(strconv.AppendInt(dst, d.Milliseconds(), 10), "ms"...)
 	default:
-		return fmt.Sprintf("%.1fs", d.Seconds())
+		return append(strconv.AppendFloat(dst, d.Seconds(), 'f', 1, 64), 's')
 	}
 }
 
@@ -469,15 +512,20 @@ func FormatBytes(b int64) string {
 }
 
 func formatBytes(b int64) string {
+	var scratch [64]byte
+	return string(appendLogBytes(scratch[:0], b))
+}
+
+func appendLogBytes(dst []byte, b int64) []byte {
 	switch {
 	case b < 1024:
-		return fmt.Sprintf("%d B", b)
+		return append(strconv.AppendInt(dst, b, 10), " B"...)
 	case b < 1024*1024:
-		return fmt.Sprintf("%.1f KB", float64(b)/1024)
+		return append(strconv.AppendFloat(dst, float64(b)/1024, 'f', 1, 64), " KB"...)
 	case b < 1024*1024*1024:
-		return fmt.Sprintf("%.1f MB", float64(b)/(1024*1024))
+		return append(strconv.AppendFloat(dst, float64(b)/(1024*1024), 'f', 1, 64), " MB"...)
 	default:
-		return fmt.Sprintf("%.1f GB", float64(b)/(1024*1024*1024))
+		return append(strconv.AppendFloat(dst, float64(b)/(1024*1024*1024), 'f', 1, 64), " GB"...)
 	}
 }
 

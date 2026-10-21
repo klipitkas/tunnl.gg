@@ -210,8 +210,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reqBody = tunnel.NewCapture(r.Body)
 		r.Body = reqBody
 	}
-	in := &countingReader{ReadCloser: r.Body}
+	var in *countingReader
 	if r.Body != nil && r.Body != http.NoBody {
+		in = &countingReader{ReadCloser: r.Body}
 		r.Body = in
 	}
 	ctx := tunnel.WithOrigin(r.Context(), originAddr(client.Addr, visitorIP, r.RemoteAddr))
@@ -307,8 +308,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if p != nil && status == 0 {
 			status = http.StatusBadGateway
 		}
-		tun.CountRequest(status, in.n, sw.bytes, time.Since(requestStart))
-		s.metrics.requestDone(requestResult(sw.status, state.proxyErr, p != nil), time.Since(requestStart), in.n, sw.bytes)
+		var uploaded int64
+		if in != nil {
+			uploaded = in.n
+		}
+		tun.CountRequest(status, uploaded, sw.bytes, time.Since(requestStart))
+		s.metrics.requestDone(requestResult(sw.status, state.proxyErr, p != nil), time.Since(requestStart), uploaded, sw.bytes)
 		if insp != nil {
 			insp.Add(tunnel.Exchange{
 				Time:           requestStart,
@@ -376,10 +381,11 @@ func (s *Server) logTunnlEvent(tun *tunnel.Tunnel, r *http.Request, client clien
 // describeProxyError explains in plain words why a request couldn't be
 // completed by the tunneled app, for the tunnel owner's request log.
 func describeProxyError(err error) string {
+	if err == nil {
+		return ""
+	}
 	var openErr *ssh.OpenChannelError
 	switch {
-	case err == nil:
-		return ""
 	case errors.As(err, &openErr):
 		// The SSH client couldn't connect to the local app, e.g. nothing is
 		// listening on the forwarded port
@@ -665,7 +671,7 @@ func setForwardedHeaders(out http.Header, in *http.Request, client clientip.Resu
 	out.Del("X-Forwarded-Host")
 	out.Del("X-Forwarded-Proto")
 	if !client.ViaCloudflare {
-		out.Del("CF-Connecting-IP")
+		out.Del("Cf-Connecting-Ip")
 	}
 
 	if client.Addr.IsValid() {
