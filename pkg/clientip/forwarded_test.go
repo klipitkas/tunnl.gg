@@ -15,7 +15,7 @@ func referenceForwardedFor(r *Resolver, peer netip.Addr, h http.Header) netip.Ad
 	}
 	client := peer
 	for i := len(hops) - 1; i >= 0; i-- {
-		addr := parseAddr(strings.TrimSpace(hops[i]))
+		addr := referenceParseAddr(strings.TrimSpace(hops[i]))
 		if !addr.IsValid() {
 			return client
 		}

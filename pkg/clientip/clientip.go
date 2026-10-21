@@ -149,7 +149,15 @@ func (r *Resolver) fromForwardedFor(peer netip.Addr, h http.Header) netip.Addr {
 
 // parseAddr parses "ip", "ip:port", or "[ipv6]:port", unmapping IPv4-in-IPv6.
 func parseAddr(s string) netip.Addr {
-	if addrPort, err := netip.ParseAddrPort(s); err == nil {
+	// IPv4 with a port has one colon; IPv6 with a port must be bracketed.
+	// Bare addresses go straight to ParseAddr, avoiding an allocated error
+	// from trying ParseAddrPort first on every forwarding-header hop.
+	colon := strings.IndexByte(s, ':')
+	if colon >= 0 && (s[0] == '[' || !strings.Contains(s[colon+1:], ":")) {
+		addrPort, err := netip.ParseAddrPort(s)
+		if err != nil {
+			return netip.Addr{}
+		}
 		return addrPort.Addr().Unmap()
 	}
 	addr, err := netip.ParseAddr(s)
