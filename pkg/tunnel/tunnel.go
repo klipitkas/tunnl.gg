@@ -98,24 +98,42 @@ func New(subdomain string, opener ChannelOpener, bindAddr string, bindPort uint3
 	return t
 }
 
-// BeginRequest marks a request or WebSocket as in flight. The tunnel does not
-// become idle until the returned function is called, so long-lived streams and
-// WebSockets keep it alive. The returned function is safe to call more than once.
-func (t *Tunnel) BeginRequest() (end func()) {
+// RequestActivity keeps a request or WebSocket in flight until End is called.
+// Use the pointer returned by BeginRequest; a RequestActivity must not be copied.
+type RequestActivity struct {
+	tunnel *Tunnel
+	ended  bool // guarded by tunnel.mu, together with inFlight and LastActive
+}
+
+// BeginRequest marks a request or WebSocket as in flight. Call End on the
+// returned activity when it finishes, usually with defer t.BeginRequest().End().
+// Long-lived streams and WebSockets keep the tunnel active until then.
+func (t *Tunnel) BeginRequest() *RequestActivity {
+	// Keep construction small enough to inline so a deferred activity can stay
+	// on the caller's stack. Keep the locked bookkeeping in a separate helper.
+	t.beginRequest()
+	return &RequestActivity{tunnel: t}
+}
+
+func (t *Tunnel) beginRequest() {
 	t.mu.Lock()
 	t.inFlight++
 	t.LastActive = time.Now()
 	t.mu.Unlock()
+}
 
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			t.mu.Lock()
-			t.inFlight--
-			t.LastActive = time.Now()
-			t.mu.Unlock()
-		})
+// End records completion exactly once, refreshing the tunnel's idle timer.
+// It is safe to call repeatedly or concurrently; every call waits for the
+// first completion to finish updating the tunnel.
+func (a *RequestActivity) End() {
+	t := a.tunnel
+	t.mu.Lock()
+	if !a.ended {
+		a.ended = true
+		t.inFlight--
+		t.LastActive = time.Now()
 	}
+	t.mu.Unlock()
 }
 
 // IsExpired returns true if the tunnel has been inactive for too long or exceeded max lifetime.

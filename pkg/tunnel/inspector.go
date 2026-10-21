@@ -269,7 +269,7 @@ func (t *Tunnel) Replay(ctx context.Context, id uint64) (Exchange, error) {
 		RequestBody:   orig.RequestBody,
 		Replay:        true,
 	}
-	defer t.BeginRequest()() // counts as activity, like a visitor's request
+	defer t.BeginRequest().End() // counts as activity, like a visitor's request
 	resp, err := t.Transport().RoundTrip(req)
 	if err != nil {
 		e.Duration = time.Since(e.Time)

@@ -16,7 +16,7 @@ func newTestTunnel(t *testing.T) *Tunnel {
 func TestIsExpired_NotWhileRequestInFlight(t *testing.T) {
 	tun := newTestTunnel(t)
 
-	end := tun.BeginRequest()
+	activity := tun.BeginRequest()
 	// A long-lived stream or WebSocket has been open for longer than the timeout
 	tun.mu.Lock()
 	tun.LastActive = time.Now().Add(-3 * time.Hour)
@@ -26,8 +26,8 @@ func TestIsExpired_NotWhileRequestInFlight(t *testing.T) {
 		t.Error("tunnel with a request in flight should not expire from inactivity")
 	}
 
-	end()
-	end() // safe to call twice
+	activity.End()
+	activity.End() // safe to call twice
 	if tun.IsExpired() {
 		t.Error("finishing a request should reset the inactivity timer")
 	}
@@ -42,7 +42,7 @@ func TestIsExpired_NotWhileRequestInFlight(t *testing.T) {
 
 func TestIsExpired_MaxLifetimeWhileRequestInFlight(t *testing.T) {
 	tun := newTestTunnel(t)
-	defer tun.BeginRequest()()
+	defer tun.BeginRequest().End()
 
 	tun.mu.Lock()
 	tun.CreatedAt = time.Now().Add(-25 * time.Hour)

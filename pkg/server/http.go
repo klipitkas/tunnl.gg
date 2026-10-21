@@ -100,7 +100,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	defer tun.BeginRequest()()
+	defer tun.BeginRequest().End()
 	s.IncrementRequests()
 
 	// CORS preflights carry no credentials, so they're answered before the
