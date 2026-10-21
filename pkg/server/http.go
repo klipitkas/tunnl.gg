@@ -196,15 +196,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The inspector keeps what the app was sent and what it answered
 	insp := tun.Inspector()
 	var reqBody *tunnel.Capture
-	// The proxy callbacks and deferred accounting share a request lifetime.
-	// Keep their mutable state in one allocation. None of it is pooled or
-	// reused by another request.
+	// The proxy callbacks, response wrappers and deferred accounting share a
+	// request lifetime. Keep their mutable state in one allocation. None of it
+	// is pooled or reused by another request.
 	var state struct {
 		respBody              *tunnel.Capture
 		outHost               string
 		outHeader, respHeader http.Header
 		proxyErr              error
-		body                  *limitedReadCloser // the response body, once the app responds
+		body                  limitedReadCloser
+		writer                statusCaptureWriter
 	}
 	if insp != nil && r.Body != nil && r.Body != http.NoBody {
 		reqBody = tunnel.NewCapture(r.Body)
@@ -218,7 +219,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := tunnel.WithOrigin(r.Context(), originAddr(client.Addr, visitorIP, r.RemoteAddr))
 	dw, r := newProxyDeadlines(ctx, w, r, config.ProxyIdleTimeout)
 	defer dw.stop()
-	sw := &statusCaptureWriter{ResponseWriter: dw}
+	state.writer.ResponseWriter = dw
+	sw := &state.writer
 
 	// The tunneled app decides its own response headers; CORS ones are added
 	// back if it sets none
@@ -261,11 +263,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return fmt.Errorf("%w: %d bytes (max %d)", errResponseTooLarge, resp.ContentLength, config.MaxResponseBodySize)
 			}
 			// Wrap body with size limiter for chunked/unknown-length responses
-			state.body = &limitedReadCloser{
+			state.body = limitedReadCloser{
 				rc:    resp.Body,
 				limit: config.MaxResponseBodySize,
 			}
-			resp.Body = state.body
+			resp.Body = &state.body
 			if insp != nil {
 				state.respHeader = resp.Header.Clone()
 				state.respBody = tunnel.NewCapture(resp.Body)
@@ -292,7 +294,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p := recover()
 		detail := describeProxyError(state.proxyErr)
 		if p != nil {
-			detail = describeCutOff(state.body)
+			detail = describeCutOff(&state.body)
 		}
 		logEntry(tun, tunnel.Entry{
 			Time:    requestStart,
