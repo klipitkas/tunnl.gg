@@ -140,16 +140,11 @@ func (at *AbuseTracker) CheckConnectionRate(ip string) bool {
 	windowStart := now.Add(-config.ConnectionRateWindow)
 
 	// Get existing timestamps and filter to current window
-	times := at.connectionTimes[ip]
-	validTimes := make([]time.Time, 0, len(times))
-	for _, t := range times {
-		if t.After(windowStart) {
-			validTimes = append(validTimes, t)
-		}
-	}
+	validTimes := recentConnectionTimes(at.connectionTimes[ip], windowStart)
 
 	// Check if over limit
 	if len(validTimes) >= config.MaxConnectionsPerMinute {
+		at.connectionTimes[ip] = validTimes
 		at.violationCounts[ip]++
 
 		// Auto-block after too many violations
@@ -207,42 +202,54 @@ func (at *AbuseTracker) cleanup() {
 			return
 		case <-ticker.C:
 			at.mu.Lock()
-
-			now := time.Now()
-			windowStart := now.Add(-config.ConnectionRateWindow)
-
-			// Clean up connection times
-			for ip, times := range at.connectionTimes {
-				validTimes := make([]time.Time, 0, len(times))
-				for _, t := range times {
-					if t.After(windowStart) {
-						validTimes = append(validTimes, t)
-					}
-				}
-				if len(validTimes) == 0 {
-					delete(at.connectionTimes, ip)
-				} else {
-					at.connectionTimes[ip] = validTimes
-				}
-			}
-
-			// Clean up expired blocks
-			for ip, expiry := range at.blockedIPs {
-				if expiry.Before(now) {
-					delete(at.blockedIPs, ip)
-				}
-			}
-
-			// Clean up stale violation counts (IPs that haven't had recent activity and aren't blocked)
-			for ip := range at.violationCounts {
-				_, hasActivity := at.connectionTimes[ip]
-				_, isBlocked := at.blockedIPs[ip]
-				if !hasActivity && !isBlocked {
-					delete(at.violationCounts, ip)
-				}
-			}
-
+			at.cleanupExpired(time.Now())
 			at.mu.Unlock()
 		}
 	}
+}
+
+// cleanupExpired removes stale tracking state. The caller holds at.mu.
+func (at *AbuseTracker) cleanupExpired(now time.Time) {
+	windowStart := now.Add(-config.ConnectionRateWindow)
+
+	// Clean up connection times
+	for ip, times := range at.connectionTimes {
+		validTimes := recentConnectionTimes(times, windowStart)
+		if len(validTimes) == 0 {
+			delete(at.connectionTimes, ip)
+		} else {
+			at.connectionTimes[ip] = validTimes
+		}
+	}
+
+	// Clean up expired blocks
+	for ip, expiry := range at.blockedIPs {
+		if expiry.Before(now) {
+			delete(at.blockedIPs, ip)
+		}
+	}
+
+	// Clean up stale violation counts (IPs that haven't had recent activity and aren't blocked)
+	for ip := range at.violationCounts {
+		_, hasActivity := at.connectionTimes[ip]
+		_, isBlocked := at.blockedIPs[ip]
+		if !hasActivity && !isBlocked {
+			delete(at.violationCounts, ip)
+		}
+	}
+}
+
+// recentConnectionTimes retains timestamps strictly inside the sliding window.
+// It compacts the existing slice in place; callers hold at.mu and must store
+// the returned slice before releasing the lock. Expired entries are cleared
+// so the unused tail does not retain their time.Location pointers.
+func recentConnectionTimes(times []time.Time, windowStart time.Time) []time.Time {
+	validTimes := times[:0]
+	for _, t := range times {
+		if t.After(windowStart) {
+			validTimes = append(validTimes, t)
+		}
+	}
+	clear(times[len(validTimes):])
+	return validTimes
 }
