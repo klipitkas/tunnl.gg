@@ -94,9 +94,13 @@ const (
 	// Request logging
 	LogBufferSize = 128 // buffered channel size for SSH terminal request logs
 
-	// Interstitial warning cookie
-	WarningCookieName   = "tunnl_warned"
-	WarningCookieMaxAge = 86400 // 1 day
+	// Interstitial warning cookie, set by the warning page. Stable subdomains
+	// stay with their owner, so accepting the warning for one lasts longer;
+	// its cookie has its own value so it doesn't skip the warning on others.
+	WarningCookieName         = "tunnl_warned"
+	WarningCookieMaxAge       = 86400 // 1 day
+	WarningCookieStable       = "stable"
+	WarningCookieStableMaxAge = 7 * 86400 // 1 week
 )
 
 // Limits are the limits and features that apply to a client's tunnels.

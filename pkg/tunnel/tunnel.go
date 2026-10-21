@@ -22,6 +22,7 @@ type Tunnel struct {
 	BindPort       uint32
 	ClientIP       string        // SSH client IP that created this tunnel
 	AccountID      string        // the account whose key opened it, or "" for anonymous clients
+	Stable         bool          // its subdomain stays with its key or account; set before the tunnel is shared
 	Limits         config.Limits // set before the tunnel is shared, then read-only
 	mu             sync.Mutex
 	rateLimiter    *RateLimiter      // Tunnel-wide rate limit across all visitors

@@ -144,6 +144,18 @@ func TestReserveSubdomain_SkipsReservedSubdomains(t *testing.T) {
 	}
 }
 
+func TestRegisterTunnel_RandomSubdomainIsNotStable(t *testing.T) {
+	s := newTestServer(t)
+
+	sub, err := s.ReserveSubdomain(nil)
+	if err != nil {
+		t.Fatalf("ReserveSubdomain() error: %v", err)
+	}
+	if tun := s.RegisterTunnel(sub, nil, "localhost", 80, "192.0.2.1", config.FreeLimits(), ""); tun == nil || tun.Stable {
+		t.Fatalf("RegisterTunnel() = %v, want a tunnel that isn't stable", tun)
+	}
+}
+
 func TestRegisterTunnel_RequiresReservation(t *testing.T) {
 	s := newTestServer(t)
 

@@ -298,12 +298,14 @@ func (s *Server) RegisterTunnel(sub string, conn sshConnection, bindAddr string,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if owner, held := s.owners[sub]; !held || owner.conn != conn {
+	owner, held := s.owners[sub]
+	if !held || owner.conn != conn {
 		return nil
 	}
 	t := tunnel.New(sub, timedOpener{conn, &s.metrics}, bindAddr, bindPort, clientIP)
 	t.Limits = limits
 	t.AccountID = accountID
+	t.Stable = owner.owner != ""
 	if limits.Inspect {
 		t.EnableInspector()
 	}

@@ -184,7 +184,7 @@ done
 To run it as a background service with launchd or systemd, see
 [Keep a tunnel running](https://tunnl.gg/guides/keep-a-tunnel-running).
 
-**Skip the warning page** that browsers see once a day, for your own tools and tests:
+**Skip the warning page** that browsers see once a day (once a week for stable URLs), for your own tools and tests:
 
 ```bash
 curl -H "tunnl-skip-browser-warning: 1" https://happy-tiger-a1b2c3d4.tunnl.gg
@@ -226,10 +226,11 @@ their random or stable URL; a name they give is ignored, and the banner says so.
 | SSH keepalive | 45 seconds | The connection closes after 45 seconds with nothing from the client; the server asks for a reply after 15 quiet seconds |
 | Abuse blocks | 1 hour, after 10 violations | Temporary IP block after repeated SSH rate limit violations |
 
-Browsers see a warning page before reaching a tunnel (once a day), to protect them from
-phishing. Every response from a tunnel, the app's and tunnl's own, carries
-`X-Robots-Tag: noindex, nofollow` whatever the app sends: a tunnel is someone's machine for
-a while, not a website, and indexing it would make phishing pages easy to find.
+Browsers see a warning page before reaching a tunnel (once a day, or once a week for stable
+URLs), to protect them from phishing. Every response from a tunnel, the app's and tunnl's
+own, carries `X-Robots-Tag: noindex, nofollow` whatever the app sends: a tunnel is
+someone's machine for a while, not a website, and indexing it would make phishing pages
+easy to find.
 
 # Running your own server
 

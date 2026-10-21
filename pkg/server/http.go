@@ -148,9 +148,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Show interstitial warning for browser requests
 	if tun.Limits.BrowserWarning && isBrowserRequest(r) &&
 		r.Header.Get("tunnl-skip-browser-warning") == "" &&
-		!hasWarningCookie(r, sub) {
+		!hasWarningCookie(r, sub, tun.Stable) {
 		s.logTunnlEvent(tun, r, client, http.StatusTemporaryRedirect, answerWarningPage, "browser sent to the warning page")
-		s.redirectToWarningPage(w, r, sub)
+		s.redirectToWarningPage(w, r, sub, tun.Stable)
 		return
 	}
 
@@ -639,15 +639,21 @@ func isBrowserRequest(r *http.Request) bool {
 	return false
 }
 
-func hasWarningCookie(r *http.Request, sub string) bool {
+// hasWarningCookie reports whether the visitor accepted the warning for sub.
+// The week-long cookie for stable subdomains only counts on a stable tunnel,
+// since anyone can link to the warning page and ask for it.
+func hasWarningCookie(r *http.Request, sub string, stable bool) bool {
 	cookie, err := r.Cookie(config.WarningCookieName + "_" + sub)
 	if err != nil {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte("1")) == 1
+	if subtle.ConstantTimeCompare([]byte(cookie.Value), []byte("1")) == 1 {
+		return true
+	}
+	return stable && subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(config.WarningCookieStable)) == 1
 }
 
-func (s *Server) redirectToWarningPage(w http.ResponseWriter, r *http.Request, sub string) {
+func (s *Server) redirectToWarningPage(w http.ResponseWriter, r *http.Request, sub string, stable bool) {
 	setSecurityHeaders(w)
 	originalURL := "https://" + r.Host + r.URL.RequestURI()
 	fullSubdomain := sub + "." + s.domain
@@ -655,6 +661,10 @@ func (s *Server) redirectToWarningPage(w http.ResponseWriter, r *http.Request, s
 		s.domain,
 		url.QueryEscape(originalURL),
 		url.QueryEscape(fullSubdomain))
+	if stable {
+		// The warning page then remembers it for a week instead of a day
+		warningURL += "&stable=1"
+	}
 	http.Redirect(w, r, warningURL, http.StatusTemporaryRedirect)
 }
 

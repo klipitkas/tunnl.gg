@@ -366,7 +366,8 @@ Browser                    Server                         Client
     Backends receive `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto` set by the server; visitor-supplied
     forwarding headers, and `CF-Connecting-IP` not from Cloudflare, are removed.
 
-12. **Phishing Protection**: Browser requests show interstitial warning page (cookie-based, 1 day).
+12. **Phishing Protection**: Browser requests show interstitial warning page (cookie-based, 1 day; 1 week for stable
+    subdomains, whose cookie is only accepted on a stable tunnel).
 
 13. **Security Headers**: Server-generated responses (errors, redirects) include `X-Content-Type-Options`, `X-Frame-Options: DENY`,
     and `Referrer-Policy`. Proxied responses keep the app's own headers; `X-Content-Type-Options` and `Referrer-Policy`

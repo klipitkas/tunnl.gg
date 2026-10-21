@@ -99,11 +99,15 @@ func TestHasWarningCookie(t *testing.T) {
 	tests := []struct {
 		name   string
 		cookie *http.Cookie
+		stable bool
 		want   bool
 	}{
-		{"no cookie", nil, false},
-		{"valid cookie", &http.Cookie{Name: cookieName, Value: "1"}, true},
-		{"wrong value", &http.Cookie{Name: cookieName, Value: "0"}, false},
+		{"no cookie", nil, false, false},
+		{"valid cookie", &http.Cookie{Name: cookieName, Value: "1"}, false, true},
+		{"day cookie on a stable tunnel", &http.Cookie{Name: cookieName, Value: "1"}, true, true},
+		{"week cookie on a stable tunnel", &http.Cookie{Name: cookieName, Value: config.WarningCookieStable}, true, true},
+		{"week cookie on a random tunnel", &http.Cookie{Name: cookieName, Value: config.WarningCookieStable}, false, false},
+		{"wrong value", &http.Cookie{Name: cookieName, Value: "0"}, true, false},
 	}
 
 	for _, tt := range tests {
@@ -112,7 +116,7 @@ func TestHasWarningCookie(t *testing.T) {
 			if tt.cookie != nil {
 				r.AddCookie(tt.cookie)
 			}
-			if got := hasWarningCookie(r, sub); got != tt.want {
+			if got := hasWarningCookie(r, sub, tt.stable); got != tt.want {
 				t.Errorf("hasWarningCookie() = %v, want %v", got, tt.want)
 			}
 		})
@@ -400,7 +404,7 @@ func TestRedirectToWarningPage(t *testing.T) {
 	r.Host = "happy-tiger-abcdef01.tunnl.gg"
 	w := httptest.NewRecorder()
 
-	s.redirectToWarningPage(w, r, sub)
+	s.redirectToWarningPage(w, r, sub, false)
 
 	if w.Code != http.StatusTemporaryRedirect {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusTemporaryRedirect)
@@ -415,6 +419,15 @@ func TestRedirectToWarningPage(t *testing.T) {
 	}
 	if !strings.Contains(loc, "subdomain="+url.QueryEscape("happy-tiger-abcdef01.tunnl.gg")) {
 		t.Errorf("Location missing subdomain param: %q", loc)
+	}
+	if strings.Contains(loc, "stable=") {
+		t.Errorf("Location for a random subdomain asks for the stable cookie: %q", loc)
+	}
+
+	w = httptest.NewRecorder()
+	s.redirectToWarningPage(w, r, sub, true)
+	if loc := w.Header().Get("Location"); !strings.HasSuffix(loc, "&stable=1") {
+		t.Errorf("Location for a stable subdomain = %q, want it to end with &stable=1", loc)
 	}
 }
 
