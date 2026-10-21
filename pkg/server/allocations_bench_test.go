@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/klipitkas/tunnl.gg/pkg/config"
 	"github.com/klipitkas/tunnl.gg/pkg/tunnel"
@@ -69,7 +70,7 @@ func BenchmarkRequestAllocations(b *testing.B) {
 				if tc.ipv4 {
 					r.RemoteAddr = "198.51.100.1:1234"
 				}
-				w := httptest.NewRecorder()
+				w := &allocationRecorder{ResponseRecorder: httptest.NewRecorder()}
 				s.ServeHTTP(w, r)
 				want := http.StatusOK
 				if tc.missing {
@@ -89,6 +90,13 @@ func BenchmarkRequestAllocations(b *testing.B) {
 		})
 	}
 }
+
+// Real HTTP writers support deadlines. Avoid measuring unsupported-operation
+// errors from httptest.ResponseRecorder as if they were relay allocations.
+type allocationRecorder struct{ *httptest.ResponseRecorder }
+
+func (*allocationRecorder) SetReadDeadline(time.Time) error  { return nil }
+func (*allocationRecorder) SetWriteDeadline(time.Time) error { return nil }
 
 type allocationBackend struct {
 	payload []byte

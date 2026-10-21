@@ -195,9 +195,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.RequestURI()
 	// The inspector keeps what the app was sent and what it answered
 	insp := tun.Inspector()
-	var reqBody, respBody *tunnel.Capture
-	var outHost string
-	var outHeader, respHeader http.Header
+	var reqBody *tunnel.Capture
+	// The proxy callbacks and deferred accounting share a request lifetime.
+	// Keep their mutable state in one allocation. None of it is pooled or
+	// reused by another request.
+	var state struct {
+		respBody              *tunnel.Capture
+		outHost               string
+		outHeader, respHeader http.Header
+		proxyErr              error
+		body                  *limitedReadCloser // the response body, once the app responds
+	}
 	if insp != nil && r.Body != nil && r.Body != http.NoBody {
 		reqBody = tunnel.NewCapture(r.Body)
 		r.Body = reqBody
@@ -206,8 +214,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil && r.Body != http.NoBody {
 		r.Body = in
 	}
-	var proxyErr error
-	var body *limitedReadCloser // the response body, once the app responds
 	ctx := tunnel.WithOrigin(r.Context(), originAddr(client.Addr, visitorIP, r.RemoteAddr))
 	dw, r, stopDeadlines := newProxyDeadlines(ctx, w, r, config.ProxyIdleTimeout)
 	defer stopDeadlines()
@@ -235,7 +241,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			setForwardedHeaders(pr.Out.Header, pr.In, client, visitorIP)
 			if insp != nil {
-				outHost, outHeader = pr.Out.Host, pr.Out.Header.Clone()
+				state.outHost, state.outHeader = pr.Out.Host, pr.Out.Header.Clone()
 			}
 		},
 		Transport: tun.Transport(),
@@ -254,21 +260,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return fmt.Errorf("%w: %d bytes (max %d)", errResponseTooLarge, resp.ContentLength, config.MaxResponseBodySize)
 			}
 			// Wrap body with size limiter for chunked/unknown-length responses
-			body = &limitedReadCloser{
+			state.body = &limitedReadCloser{
 				rc:    resp.Body,
 				limit: config.MaxResponseBodySize,
 			}
-			resp.Body = body
+			resp.Body = state.body
 			if insp != nil {
-				respHeader = resp.Header.Clone()
-				respBody = tunnel.NewCapture(resp.Body)
-				resp.Body = respBody
+				state.respHeader = resp.Header.Clone()
+				state.respBody = tunnel.NewCapture(resp.Body)
+				resp.Body = state.respBody
 			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("Proxy error for %s: %v", sub, err)
-			proxyErr = err
+			state.proxyErr = err
 			setSecurityHeaders(w)
 			setCORS(w.Header(), corsAllow, corsCredentials)
 			if errors.Is(err, errResponseTooLarge) {
@@ -283,9 +289,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// can't be copied, so log from a deferred call that sees the panic
 	defer func() {
 		p := recover()
-		detail := describeProxyError(proxyErr)
+		detail := describeProxyError(state.proxyErr)
 		if p != nil {
-			detail = describeCutOff(body)
+			detail = describeCutOff(state.body)
 		}
 		logEntry(tun, tunnel.Entry{
 			Time:    requestStart,
@@ -302,19 +308,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusBadGateway
 		}
 		tun.CountRequest(status, in.n, sw.bytes, time.Since(requestStart))
-		s.metrics.requestDone(requestResult(sw.status, proxyErr, p != nil), time.Since(requestStart), in.n, sw.bytes)
+		s.metrics.requestDone(requestResult(sw.status, state.proxyErr, p != nil), time.Since(requestStart), in.n, sw.bytes)
 		if insp != nil {
 			insp.Add(tunnel.Exchange{
 				Time:           requestStart,
 				Method:         r.Method,
 				Target:         target,
-				Host:           outHost,
+				Host:           state.outHost,
 				Visitor:        visitorIP,
-				RequestHeader:  outHeader,
+				RequestHeader:  state.outHeader,
 				RequestBody:    reqBody.TakeBody(),
 				Status:         sw.status,
-				ResponseHeader: respHeader,
-				ResponseBody:   respBody.TakeBody(),
+				ResponseHeader: state.respHeader,
+				ResponseBody:   state.respBody.TakeBody(),
 				Duration:       time.Since(requestStart),
 				Note:           detail,
 			})
