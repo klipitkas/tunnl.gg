@@ -13,6 +13,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,6 +98,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.logTunnlEvent(tun, r, client, http.StatusTooManyRequests, answerRateLimited, "rate limited by tunnl")
 		w.Header().Set("Retry-After", "1")
 		localError(w, "Too Many Requests", http.StatusTooManyRequests)
+		return
+	}
+
+	// The owner's whole budget, so it can't run out mid-request; one request
+	// can still go over it by up to the body size limits
+	if s.overTransfer(tun) {
+		s.logTunnlEvent(tun, r, client, http.StatusTooManyRequests, answerDailyTransfer, "the tunnel reached its daily transfer limit (tunnl limit)")
+		w.Header().Set("Retry-After", strconv.Itoa(int(s.transfer.untilReset().Seconds())+1))
+		localError(w, "Daily Transfer Limit Reached", http.StatusTooManyRequests)
 		return
 	}
 
@@ -315,6 +325,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			uploaded = in.n
 		}
 		tun.CountRequest(status, uploaded, sw.bytes, time.Since(requestStart))
+		s.countTransfer(tun, uploaded, sw.bytes)
 		s.metrics.requestDone(requestResult(sw.status, state.proxyErr, p != nil), time.Since(requestStart), uploaded, sw.bytes)
 		if insp != nil {
 			insp.Add(tunnel.Exchange{
@@ -511,6 +522,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, tun *tu
 	<-clientDone
 
 	tun.CountRequest(http.StatusSwitchingProtocols, backendBytes, clientBytes, time.Since(wsEntry.Time))
+	s.countTransfer(tun, backendBytes, clientBytes)
 	s.metrics.websocketDone(time.Since(wsEntry.Time), backendBytes+clientBytes)
 	closed := wsEntry
 	closed.Time = time.Now()

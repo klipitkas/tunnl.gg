@@ -56,6 +56,9 @@ const (
 	// Response size limits
 	MaxResponseBodySize = 128 * 1024 * 1024 // 128MB
 
+	// Transfer limits
+	FreeDailyTransfer = 5 << 30 // 5 GB of request and response bodies per client IP per UTC day
+
 	// HTTP server timeouts
 	HTTPReadHeaderTimeout  = 5 * time.Second
 	HTTPReadTimeout        = 10 * time.Second
@@ -115,6 +118,8 @@ type Limits struct {
 	OptionsNote       string        // added to the error when a client sets an option it may not, e.g. how to get it
 	UpgradeNote       string        // shown with the time limits (in the banner, the warning before they close a tunnel, and when they do), e.g. how to lift them; empty shows nothing
 	Inspect           bool          // keep the latest requests for the request inspector (tunnel.Inspector)
+	DailyTransfer     int64         // bytes each client IP, or account, may send through its tunnels per UTC day, both ways; 0 means no limit
+	TransferNote      string        // added to the notice when a client reaches DailyTransfer, e.g. how to raise it
 }
 
 // Options clients can set in the ssh command; see tunnel.ParseOptions.
@@ -151,6 +156,7 @@ func FreeLimits() Limits {
 		MaxLifetime:       MaxTunnelLifetime,
 		BrowserWarning:    true,
 		Options:           AllOptions,
+		DailyTransfer:     FreeDailyTransfer,
 	}
 }
 

@@ -123,12 +123,13 @@ const (
 	answerTunnelWebSockets         // the tunnel's open WebSockets
 	answerVisitorRequests          // the visitor's open requests
 	answerTunnelRequests           // the tunnel's open requests
+	answerDailyTransfer            // the tunnel owner's daily transfer
 	numAnswers
 )
 
 var answerNames = [numAnswers]string{"too_large", "bad_host", "no_tunnel", "no_options", "allowlist", "rate_limited",
 	"cors_preflight", "password_tries", "password", "warning_page", "visitor_websockets", "tunnel_websockets",
-	"visitor_requests", "tunnel_requests"}
+	"visitor_requests", "tunnel_requests", "daily_transfer"}
 
 func (m *relayMetrics) answer(why int) {
 	m.answered[why].Add(1)

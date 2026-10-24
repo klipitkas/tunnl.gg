@@ -64,6 +64,7 @@ type Server struct {
 	wsPerVisitor  *connLimiter       // concurrent WebSockets keyed by visitor IP
 	reqPerTunnel  *connLimiter       // in-flight proxied requests keyed by subdomain
 	reqPerVisitor *connLimiter       // in-flight proxied requests keyed by visitor IP
+	transfer      *transferMeter     // bytes per tunnel owner today, for Limits.DailyTransfer
 	handshakes    *connLimiter       // in-progress SSH handshakes keyed by client IP
 	clientIPs     *clientip.Resolver // resolves visitors behind trusted proxies
 	// in-progress SSH handshakes server-wide, all under the single key ""
@@ -88,6 +89,7 @@ func New(hostKeyPath string, domain string) (*Server, error) {
 		freeLimits:      config.FreeLimits(),
 		wsPerTunnel:     newConnLimiter(config.MaxWebSocketsPerTunnel),
 		wsPerVisitor:    newConnLimiter(config.MaxWebSocketsPerVisitor),
+		transfer:        newTransferMeter(),
 		reqPerTunnel:    newConnLimiter(config.MaxInFlightPerTunnel),
 		reqPerVisitor:   newConnLimiter(config.MaxInFlightPerVisitor),
 		handshakes:      newConnLimiter(config.MaxHandshakesPerIP),
@@ -306,6 +308,7 @@ func (s *Server) RegisterTunnel(sub string, conn sshConnection, bindAddr string,
 	t.Limits = limits
 	t.AccountID = accountID
 	t.Stable = owner.owner != ""
+	t.Owner = owner.owner
 	if limits.Inspect {
 		t.EnableInspector()
 	}
