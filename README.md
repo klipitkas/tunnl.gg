@@ -216,7 +216,7 @@ their random or stable URL; a name they give is ignored, and the banner says so.
 | Requests per tunnel | 50/s (burst 400) | Across all visitors; excess gets 429 |
 | In-flight requests | 256 per visitor, 512 per tunnel | Concurrent proxied requests; excess gets 429 (visitor) or 503 (tunnel) |
 | Request and response bodies | 128 MB each | |
-| Daily transfer | 5 GB per IP, or per key for stable URLs | Request and response bodies and WebSocket data, both ways (IPv6 by /64). Stable URLs count per SSH key, with 15 GB for all of an IP's stable tunnels. After that visitors get 429 until 00:00 UTC |
+| Daily transfer | 5 GB per IP | Request and response bodies and WebSocket data, both ways (IPv6 by /64). Stable URLs count against both the IP and the SSH key, so neither a new key nor a new address starts over. After that visitors get 429 until 00:00 UTC |
 | Request idle timeout | 2 minutes | A proxied request is canceled after 2 minutes without data either way; long polls and streams can run longer while data flows |
 | WebSockets | 100 per tunnel, 20 per visitor IP | Concurrent connections |
 | WebSocket transfer | 1 GB per direction | Per connection |

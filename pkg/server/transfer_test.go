@@ -46,7 +46,7 @@ func TestTransferQuotas(t *testing.T) {
 	}{
 		{"192.0.2.1", "", "", [2]transferQuota{{"192.0.2.1", 100}, {}}},
 		{"2001:db8:1:2:3:4:5:6", "", "", [2]transferQuota{{"2001:db8:1:2::/64", 100}, {}}},
-		{"192.0.2.1", "", "SHA256:abc", [2]transferQuota{{"key:SHA256:abc", 100}, {"192.0.2.1", 300}}},
+		{"192.0.2.1", "", "SHA256:abc", [2]transferQuota{{"key:SHA256:abc", 100}, {"192.0.2.1", 100}}},
 		{"192.0.2.1", "acct_1", "acct_1", [2]transferQuota{{"account:acct_1", 100}, {}}},
 	} {
 		first, second := transferQuotas(&tunnel.Tunnel{ClientIP: tc.ip, AccountID: tc.account, Owner: tc.owner, Limits: limits})
@@ -96,35 +96,30 @@ func TestE2E_DailyTransferLimitStable(t *testing.T) {
 	srv, addr := startSSHServer(t)
 	free := config.FreeLimits()
 	free.BrowserWarning = false
-	free.DailyTransfer = 1000 // per key; 3000 for the IP's stable tunnels
+	free.DailyTransfer = 1000
 	srv.SetFreeLimits(free)
 	app := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, strings.Repeat("x", 600))
 	})
-	statuses := func(tt *testTunnel, n int) []int {
-		var out []int
-		for range n {
-			resp := tt.get(t, "/")
-			io.ReadAll(resp.Body)
-			resp.Body.Close()
-			out = append(out, resp.StatusCode)
-		}
-		return out
+	status := func(tt *testTunnel) int {
+		resp := tt.get(t, "/")
+		io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode
 	}
 
-	// Each key gets its own limit from the same IP...
-	for _, name := range []string{"first", "second"} {
-		tt := openTunnel(t, srv, addr, stableClient(newTestKey(t)), app)
-		if got := statuses(tt, 3); got[0] != 200 || got[1] != 200 || got[2] != 429 {
-			t.Errorf("%s key: statuses %v, want 200 200 429", name, got)
-		}
+	// A stable key and an anonymous tunnel from the same IP share its limit
+	stable := openTunnel(t, srv, addr, stableClient(newTestKey(t)), app)
+	anonymous := openTunnel(t, srv, addr, anonymousClient(), app)
+	if a, b := status(stable), status(anonymous); a != 200 || b != 200 {
+		t.Fatalf("under the limit: statuses %d %d", a, b)
 	}
-	// ...until the IP's stable tunnels reach three keys' worth
-	tt := openTunnel(t, srv, addr, stableClient(newTestKey(t)), app)
-	if got := statuses(tt, 2); got[0] != 200 || got[1] != 429 {
-		t.Errorf("third key: statuses %v, want 200 429", got)
+	// A new key doesn't get a fresh limit from the same IP
+	fresh := openTunnel(t, srv, addr, stableClient(newTestKey(t)), app)
+	if got := status(fresh); got != 429 {
+		t.Errorf("a new key from the same IP: status %d, want 429", got)
 	}
-	waitFor(t, "the notice", func() bool {
-		return strings.Contains(tt.output.String(), "for stable tunnels from your IP address")
-	})
+	if got := status(stable); got != 429 {
+		t.Errorf("the first key: status %d, want 429", got)
+	}
 }

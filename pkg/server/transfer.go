@@ -61,11 +61,6 @@ func (m *transferMeter) untilReset() time.Duration {
 	return now.Truncate(24 * time.Hour).Add(24 * time.Hour).Sub(now)
 }
 
-// stableIPShare is how many keys' daily transfer one IP's stable tunnels may
-// use together: people sharing an address (an office, a mobile carrier) each
-// get their key's limit, but making new keys can't stretch an IP's further.
-const stableIPShare = 3
-
 // transferQuota is a count a tunnel's transfer goes to, and its daily limit.
 type transferQuota struct {
 	owner string
@@ -73,15 +68,16 @@ type transferQuota struct {
 }
 
 // transferQuotas are who a tunnel's transfer counts against: its account; or
-// for the stable user, its key and its client IP; or else its client IP. IPv6
-// counts by /64, which one client can rotate through.
+// for the stable user, both its key and its client IP, so neither a new key
+// nor a new address gets a fresh limit; or else its client IP. IPv6 counts
+// by /64, which one client can rotate through.
 func transferQuotas(tun *tunnel.Tunnel) (first, second transferQuota) {
 	limit := tun.Limits.DailyTransfer
 	switch {
 	case tun.AccountID != "":
 		return transferQuota{"account:" + tun.AccountID, limit}, transferQuota{}
 	case tun.Owner != "":
-		return transferQuota{"key:" + tun.Owner, limit}, transferQuota{visitorKey(tun.ClientIP), limit * stableIPShare}
+		return transferQuota{"key:" + tun.Owner, limit}, transferQuota{visitorKey(tun.ClientIP), limit}
 	}
 	return transferQuota{visitorKey(tun.ClientIP), limit}, transferQuota{}
 }
@@ -93,24 +89,22 @@ func (s *Server) overTransfer(tun *tunnel.Tunnel) bool {
 }
 
 // countTransfer counts a request's bytes against the tunnel's owner, and
-// tells the owner when that reaches a daily limit.
+// tells the owner when that reaches the daily limit.
 func (s *Server) countTransfer(tun *tunnel.Tunnel, in, out int64) {
 	n := max(in, 0) + max(out, 0)
 	first, second := transferQuotas(tun)
-	reached, what := int64(0), "your tunnels"
-	if s.transfer.add(first.owner, n, first.limit) {
-		reached = first.limit
+	reached := s.transfer.add(first.owner, n, first.limit)
+	if second.owner != "" && s.transfer.add(second.owner, n, second.limit) {
+		reached = true
 	}
-	if second.owner != "" && s.transfer.add(second.owner, n, second.limit) && reached == 0 {
-		reached, what = second.limit, "stable tunnels from your IP address"
-	}
-	if reached == 0 {
+	if !reached {
 		return
 	}
-	log.Printf("Tunnel %s: its owner reached a daily transfer limit (%s)", tun.Subdomain, tunnel.FormatBytes(reached))
+	limit := tun.Limits.DailyTransfer
+	log.Printf("Tunnel %s: its owner reached the daily transfer limit (%s)", tun.Subdomain, tunnel.FormatBytes(limit))
 	if logger := tun.Logger(); logger != nil {
-		msg := "Reached the daily transfer limit of " + tunnel.FormatBytes(reached) + " for " + what +
-			": visitors get HTTP 429 until it resets at 00:00 UTC."
+		msg := "Reached the daily transfer limit of " + tunnel.FormatBytes(limit) +
+			" for your tunnels: visitors get HTTP 429 until it resets at 00:00 UTC."
 		if note := tun.Limits.TransferNote; note != "" {
 			msg += " " + note
 		}
