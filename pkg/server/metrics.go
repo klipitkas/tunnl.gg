@@ -75,7 +75,7 @@ type relayMetrics struct {
 }
 
 // Bucket upper bounds. Latencies are in nanoseconds, up to the 2-minute proxy
-// idle timeout; sizes are in bytes, up to the 128 MB body limits.
+// idle timeout; sizes are in bytes, past the 64 MB body limits.
 var (
 	latencyBuckets = []int64{1e6, 2.5e6, 5e6, 10e6, 25e6, 50e6, 100e6, 250e6, 500e6, 1e9, 2.5e9, 5e9, 10e9, 30e9, 60e9, 120e9}
 	sizeBuckets    = []int64{0, 256, 1 << 10, 4 << 10, 16 << 10, 64 << 10, 256 << 10, 1 << 20, 4 << 20, 16 << 20, 64 << 20, 128 << 20}

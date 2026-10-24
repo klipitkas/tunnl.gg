@@ -40,7 +40,7 @@ const (
 	PasswordFailuresPerSecond = 0.1
 
 	// Request size limits
-	MaxRequestBodySize = 128 * 1024 * 1024 // 128MB
+	MaxRequestBodySize = 64 * 1024 * 1024 // 64MB
 
 	// Connection rate limiting (new connections per IP)
 	MaxConnectionsPerMinute = 10              // max new connections per IP per minute
@@ -54,7 +54,7 @@ const (
 	MaxTunnelLifetime = 24 * time.Hour // max tunnel duration regardless of activity
 
 	// Response size limits
-	MaxResponseBodySize = 128 * 1024 * 1024 // 128MB
+	MaxResponseBodySize = 64 * 1024 * 1024 // 64MB
 
 	// Transfer limits
 	FreeDailyTransfer = 5 << 30 // 5 GB of request and response bodies per client IP per UTC day

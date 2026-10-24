@@ -29,7 +29,7 @@ func TestDescribeProxyError(t *testing.T) {
 		{"none", nil, ""},
 		{"app refused", &ssh.OpenChannelError{Reason: ssh.ConnectionFailed, Message: "Connection refused"},
 			"your local app didn't accept the connection: connection refused"},
-		{"too large", fmt.Errorf("%w: 200 bytes", errResponseTooLarge), "response larger than 128.0 MB, not sent"},
+		{"too large", fmt.Errorf("%w: 200 bytes", errResponseTooLarge), "response larger than 64.0 MB, not sent"},
 		{"client slow", fmt.Errorf("dial: %w", context.DeadlineExceeded), "your SSH client didn't connect to your local app in time"},
 		{"canceled", context.Canceled, "canceled: the visitor left, or no data for 2m"},
 		{"other", fmt.Errorf("unexpected EOF"), "couldn't get a response from your local app: unexpected EOF"},
@@ -160,7 +160,7 @@ func TestDescribeCutOff(t *testing.T) {
 		{"visitor left", &limitedReadCloser{}, "response cut off: the visitor left, or no data for 2m"},
 		{"canceled", &limitedReadCloser{err: context.Canceled}, "response cut off: the visitor left, or no data for 2m"},
 		{"too large", &limitedReadCloser{err: fmt.Errorf("%w (exceeded 5 bytes)", errResponseTooLarge)},
-			"response larger than 128.0 MB, cut off"},
+			"response larger than 64.0 MB, cut off"},
 		{"app stopped", &limitedReadCloser{err: fmt.Errorf("unexpected EOF")},
 			"response cut off: your local app stopped sending: unexpected EOF"},
 	}

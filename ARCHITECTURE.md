@@ -346,8 +346,8 @@ Browser                    Server                         Client
    - Memory-safe cleanup of tracking data
 
 8. **Request/Response Limits**:
-   - Max request body: 128 MB
-   - Max response body: 128 MB
+   - Max request body: 64 MB
+   - Max response body: 64 MB
    - Max in flight: 256 concurrent proxied requests per visitor IP (across tunnels) and 512 per tunnel
    - Idle timeout: proxied requests replace the fixed HTTPS read/write timeouts with a 2-minute idle timeout
      (extended on every body read and response write), so long polls, streams and slow uploads work while data flows
