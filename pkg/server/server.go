@@ -308,7 +308,7 @@ func (s *Server) RegisterTunnel(sub string, conn sshConnection, bindAddr string,
 	t.Limits = limits
 	t.AccountID = accountID
 	t.Stable = owner.owner != ""
-	t.Owner = owner.owner
+	t.TransferKeys = transferKeys(accountID, owner.owner, clientIP)
 	if limits.Inspect {
 		t.EnableInspector()
 	}

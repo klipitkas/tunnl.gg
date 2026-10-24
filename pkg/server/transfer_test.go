@@ -3,57 +3,68 @@ package server
 import (
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/klipitkas/tunnl.gg/pkg/config"
-	"github.com/klipitkas/tunnl.gg/pkg/tunnel"
 )
 
 func TestTransferMeter(t *testing.T) {
 	now := time.Date(2026, 10, 24, 23, 0, 0, 0, time.UTC)
 	m := newTransferMeter()
 	m.now = func() time.Time { return now }
+	a, ab := []string{"a"}, []string{"a", "b"}
 
-	if m.add("a", 60, 100) || m.over("a", 100) {
+	if m.add(a, 60, 100) || m.over(a, 100) {
 		t.Fatal("60 of 100 bytes counts as the limit")
 	}
-	if !m.add("a", 40, 100) {
+	if !m.add(ab, 40, 100) {
 		t.Error("reaching the limit isn't reported")
 	}
-	if m.add("a", 10, 100) {
+	if m.add(ab, 10, 100) {
 		t.Error("going further past the limit is reported again")
 	}
-	if !m.over("a", 100) || m.over("b", 100) || m.over("a", 0) {
+	if !m.over(a, 100) || m.over([]string{"b"}, 100) || !m.over(ab, 100) || m.over(a, 0) {
 		t.Error("over() is wrong after the limit")
+	}
+	if m.add([]string{"c"}, 10, 0); m.bytes["c"] != 0 {
+		t.Error("counted without a limit")
 	}
 	if got := m.untilReset(); got != time.Hour {
 		t.Errorf("untilReset() = %v, want 1h", got)
 	}
 
 	now = now.Add(time.Hour) // midnight UTC
-	if m.over("a", 100) {
+	if m.over(a, 100) {
 		t.Error("the limit holds past midnight")
 	}
 }
 
-func TestTransferQuotas(t *testing.T) {
-	limits := config.Limits{DailyTransfer: 100}
+func TestTransferKeys(t *testing.T) {
 	for _, tc := range []struct {
-		ip, account, owner string
-		want               [2]transferQuota
+		account, owner, ip string
+		want               []string
 	}{
-		{"192.0.2.1", "", "", [2]transferQuota{{"192.0.2.1", 100}, {}}},
-		{"2001:db8:1:2:3:4:5:6", "", "", [2]transferQuota{{"2001:db8:1:2::/64", 100}, {}}},
-		{"192.0.2.1", "", "SHA256:abc", [2]transferQuota{{"key:SHA256:abc", 100}, {"192.0.2.1", 100}}},
-		{"192.0.2.1", "acct_1", "acct_1", [2]transferQuota{{"account:acct_1", 100}, {}}},
+		{"", "", "192.0.2.1", []string{"192.0.2.1"}},
+		{"", "", "2001:db8:1:2:3:4:5:6", []string{"2001:db8:1:2::/64"}},
+		{"", "SHA256:abc", "192.0.2.1", []string{"key:SHA256:abc", "192.0.2.1"}},
+		{"acct_1", "acct_1", "192.0.2.1", []string{"account:acct_1"}},
 	} {
-		first, second := transferQuotas(&tunnel.Tunnel{ClientIP: tc.ip, AccountID: tc.account, Owner: tc.owner, Limits: limits})
-		if got := [2]transferQuota{first, second}; got != tc.want {
-			t.Errorf("transferQuotas(%q, %q, %q) = %v, want %v", tc.ip, tc.account, tc.owner, got, tc.want)
+		if got := transferKeys(tc.account, tc.owner, tc.ip); !slices.Equal(got, tc.want) {
+			t.Errorf("transferKeys(%q, %q, %q) = %q, want %q", tc.account, tc.owner, tc.ip, got, tc.want)
 		}
 	}
+}
+
+// getStatus requests / through the tunnel and returns the status.
+func getStatus(t *testing.T, tt *testTunnel) *http.Response {
+	t.Helper()
+	resp := tt.get(t, "/")
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	return resp
 }
 
 func TestE2E_DailyTransferLimit(t *testing.T) {
@@ -68,9 +79,7 @@ func TestE2E_DailyTransferLimit(t *testing.T) {
 		io.WriteString(w, strings.Repeat("x", 600))
 	}))
 	for i, want := range []int{http.StatusOK, http.StatusOK, http.StatusTooManyRequests} {
-		resp := tt.get(t, "/")
-		io.ReadAll(resp.Body)
-		resp.Body.Close()
+		resp := getStatus(t, tt)
 		if resp.StatusCode != want {
 			t.Fatalf("request %d: status %d, want %d", i+1, resp.StatusCode, want)
 		}
@@ -85,9 +94,7 @@ func TestE2E_DailyTransferLimit(t *testing.T) {
 
 	// Another tunnel from the same IP shares the limit
 	other := openTunnel(t, srv, addr, anonymousClient(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	resp := other.get(t, "/")
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusTooManyRequests {
+	if resp := getStatus(t, other); resp.StatusCode != http.StatusTooManyRequests {
 		t.Errorf("the same IP's other tunnel: status %d", resp.StatusCode)
 	}
 }
@@ -101,12 +108,7 @@ func TestE2E_DailyTransferLimitStable(t *testing.T) {
 	app := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, strings.Repeat("x", 600))
 	})
-	status := func(tt *testTunnel) int {
-		resp := tt.get(t, "/")
-		io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return resp.StatusCode
-	}
+	status := func(tt *testTunnel) int { return getStatus(t, tt).StatusCode }
 
 	// A stable key and an anonymous tunnel from the same IP share its limit
 	stable := openTunnel(t, srv, addr, stableClient(newTestKey(t)), app)

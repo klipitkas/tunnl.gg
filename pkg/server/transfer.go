@@ -2,6 +2,7 @@ package server
 
 import (
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -31,28 +32,38 @@ func (m *transferMeter) today() {
 	}
 }
 
-// over reports whether owner used up limit today; a zero limit never is.
-func (m *transferMeter) over(owner string, limit int64) bool {
+// over reports whether any of keys used up limit today; a zero limit never
+// is.
+func (m *transferMeter) over(keys []string, limit int64) bool {
 	if limit <= 0 {
 		return false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.today()
-	return m.bytes[owner] >= limit
+	for _, k := range keys {
+		if m.bytes[k] >= limit {
+			return true
+		}
+	}
+	return false
 }
 
-// add counts n bytes for owner, and reports whether they took it to limit.
-func (m *transferMeter) add(owner string, n, limit int64) (reached bool) {
-	if n <= 0 {
+// add counts n bytes for each of keys, and reports whether they took any to
+// limit. Without a limit nothing is counted.
+func (m *transferMeter) add(keys []string, n, limit int64) (reached bool) {
+	if n <= 0 || limit <= 0 {
 		return false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.today()
-	before := m.bytes[owner]
-	m.bytes[owner] = before + n
-	return limit > 0 && before < limit && before+n >= limit
+	for _, k := range keys {
+		before := m.bytes[k]
+		m.bytes[k] = before + n
+		reached = reached || before < limit && before+n >= limit
+	}
+	return reached
 }
 
 // untilReset is how long until the counts start over, at midnight UTC.
@@ -61,53 +72,42 @@ func (m *transferMeter) untilReset() time.Duration {
 	return now.Truncate(24 * time.Hour).Add(24 * time.Hour).Sub(now)
 }
 
-// transferQuota is a count a tunnel's transfer goes to, and its daily limit.
-type transferQuota struct {
-	owner string
-	limit int64
-}
-
-// transferQuotas are who a tunnel's transfer counts against: its account; or
-// for the stable user, both its key and its client IP, so neither a new key
-// nor a new address gets a fresh limit; or else its client IP. IPv6 counts
-// by /64, which one client can rotate through.
-func transferQuotas(tun *tunnel.Tunnel) (first, second transferQuota) {
-	limit := tun.Limits.DailyTransfer
+// transferKeys are who a tunnel's transfer counts against: its account; or
+// for the stable user (owner is its key), both the key and the client IP, so
+// neither a new key nor a new address gets a fresh limit; or else its client
+// IP. IPv6 counts by /64, which one client can rotate through.
+func transferKeys(accountID, owner, clientIP string) []string {
 	switch {
-	case tun.AccountID != "":
-		return transferQuota{"account:" + tun.AccountID, limit}, transferQuota{}
-	case tun.Owner != "":
-		return transferQuota{"key:" + tun.Owner, limit}, transferQuota{visitorKey(tun.ClientIP), limit}
+	case accountID != "":
+		return []string{"account:" + accountID}
+	case owner != "":
+		return []string{"key:" + owner, visitorKey(clientIP)}
 	}
-	return transferQuota{visitorKey(tun.ClientIP), limit}, transferQuota{}
-}
-
-// overTransfer reports whether the tunnel's owner used up a daily limit.
-func (s *Server) overTransfer(tun *tunnel.Tunnel) bool {
-	first, second := transferQuotas(tun)
-	return s.transfer.over(first.owner, first.limit) || second.owner != "" && s.transfer.over(second.owner, second.limit)
+	return []string{visitorKey(clientIP)}
 }
 
 // countTransfer counts a request's bytes against the tunnel's owner, and
 // tells the owner when that reaches the daily limit.
 func (s *Server) countTransfer(tun *tunnel.Tunnel, in, out int64) {
-	n := max(in, 0) + max(out, 0)
-	first, second := transferQuotas(tun)
-	reached := s.transfer.add(first.owner, n, first.limit)
-	if second.owner != "" && s.transfer.add(second.owner, n, second.limit) {
-		reached = true
-	}
-	if !reached {
+	limit := tun.Limits.DailyTransfer
+	if !s.transfer.add(tun.TransferKeys, max(in, 0)+max(out, 0), limit) {
 		return
 	}
-	limit := tun.Limits.DailyTransfer
-	log.Printf("Tunnel %s: its owner reached the daily transfer limit (%s)", tun.Subdomain, tunnel.FormatBytes(limit))
+	log.Printf("Tunnel %s: its owner reached the daily transfer limit (%s)", tun.Subdomain, formatLimit(limit))
 	if logger := tun.Logger(); logger != nil {
-		msg := "Reached the daily transfer limit of " + tunnel.FormatBytes(limit) +
+		msg := "Reached the daily transfer limit of " + formatLimit(limit) +
 			" for your tunnels: visitors get HTTP 429 until it resets at 00:00 UTC."
 		if note := tun.Limits.TransferNote; note != "" {
 			msg += " " + note
 		}
 		logger.Notice(msg)
 	}
+}
+
+// formatLimit writes whole gigabytes as "5 GB", like the documented limits.
+func formatLimit(b int64) string {
+	if b > 0 && b%(1<<30) == 0 {
+		return strconv.FormatInt(b>>30, 10) + " GB"
+	}
+	return tunnel.FormatBytes(b)
 }

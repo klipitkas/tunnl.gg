@@ -103,7 +103,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// The owner's whole budget, so it can't run out mid-request; one request
 	// can still go over it by up to the body size limits
-	if s.overTransfer(tun) {
+	if s.transfer.over(tun.TransferKeys, tun.Limits.DailyTransfer) {
 		s.logTunnlEvent(tun, r, client, http.StatusTooManyRequests, answerDailyTransfer, "the tunnel reached its daily transfer limit (tunnl limit)")
 		w.Header().Set("Retry-After", strconv.Itoa(int(s.transfer.untilReset().Seconds())+1))
 		localError(w, "Daily Transfer Limit Reached", http.StatusTooManyRequests)
