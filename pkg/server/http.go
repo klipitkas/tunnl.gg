@@ -104,6 +104,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The owner's whole budget, so it can't run out mid-request; one request
 	// can still go over it by up to the body size limits
 	if s.transfer.over(tun.TransferKeys, tun.Limits.DailyTransfer) {
+		if isBrowserRequest(r) {
+			s.logTunnlEvent(tun, r, client, http.StatusTemporaryRedirect, answerDailyTransfer, "the tunnel reached its daily transfer limit: browser sent to the limit page")
+			s.redirectToLimitPage(w, r, sub, tun.Limits.TransferNote != "")
+			return
+		}
 		s.logTunnlEvent(tun, r, client, http.StatusTooManyRequests, answerDailyTransfer, "the tunnel reached its daily transfer limit (tunnl limit)")
 		w.Header().Set("Retry-After", strconv.Itoa(int(s.transfer.untilReset().Seconds())+1))
 		localError(w, "Daily Transfer Limit Reached", http.StatusTooManyRequests)
@@ -678,6 +683,19 @@ func (s *Server) redirectToWarningPage(w http.ResponseWriter, r *http.Request, s
 		warningURL += "&stable=1"
 	}
 	http.Redirect(w, r, warningURL, http.StatusTemporaryRedirect)
+}
+
+// redirectToLimitPage sends a browser to the site's page saying the tunnel
+// reached its daily transfer limit; upgrade adds how its owner could raise
+// it. Like the warning page, it lives on the main domain.
+func (s *Server) redirectToLimitPage(w http.ResponseWriter, r *http.Request, sub string, upgrade bool) {
+	setSecurityHeaders(w)
+	w.Header().Set("Cache-Control", "no-store")
+	limitURL := "https://" + s.domain + "/limit?subdomain=" + url.QueryEscape(sub+"."+s.domain)
+	if upgrade {
+		limitURL += "&upgrade=1"
+	}
+	http.Redirect(w, r, limitURL, http.StatusTemporaryRedirect)
 }
 
 func isWebSocketRequest(r *http.Request) bool {

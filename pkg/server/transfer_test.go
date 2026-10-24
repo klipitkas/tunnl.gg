@@ -95,6 +95,13 @@ func TestE2E_DailyTransferLimit(t *testing.T) {
 			strings.Contains(tt.output.String(), "Pro doubles it.")
 	})
 
+	// Browsers go to the site's limit page, with the upgrade note for free tunnels
+	rec := tt.serveDirect("203.0.113.9:1", map[string]string{"User-Agent": "Mozilla/5.0"})
+	want := "https://" + config.DefaultDomain + "/limit?subdomain=" + tt.sub + "." + config.DefaultDomain + "&upgrade=1"
+	if rec.Code != http.StatusTemporaryRedirect || rec.Header().Get("Location") != want {
+		t.Errorf("browser: status %d, Location %q, want %q", rec.Code, rec.Header().Get("Location"), want)
+	}
+
 	// Another tunnel from the same IP shares the limit
 	other := openTunnel(t, srv, addr, anonymousClient(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	if resp := getStatus(t, other); resp.StatusCode != http.StatusTooManyRequests {
