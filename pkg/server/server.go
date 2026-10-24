@@ -48,6 +48,7 @@ type Server struct {
 	trafficSink     func(TrafficReport)          // see SetTrafficSink
 	trafficStop     chan struct{}
 	samplerStop     chan struct{} // stops sampling tunnels for the metrics
+	onStop          []func()      // see OnStop
 	mu              sync.RWMutex
 	sshConfig       *ssh.ServerConfig
 	domain          string
@@ -436,9 +437,24 @@ func closeConns(conns []*ssh.ServerConn) int {
 	return len(conns)
 }
 
+// OnStop runs f when the server stops, for example to save state. Main
+// stops it after it stopped accepting connections and requests.
+func (s *Server) OnStop(f func()) {
+	s.mu.Lock()
+	s.onStop = append(s.onStop, f)
+	s.mu.Unlock()
+}
+
 // Stop gracefully stops the server's background goroutines
 func (s *Server) Stop() {
 	s.abuseTracker.Stop()
+	s.mu.Lock()
+	onStop := s.onStop
+	s.onStop = nil
+	s.mu.Unlock()
+	for _, f := range onStop {
+		f()
+	}
 	s.mu.Lock()
 	if s.trafficStop != nil {
 		close(s.trafficStop)

@@ -135,3 +135,36 @@ func TestE2E_DailyTransferLimitStable(t *testing.T) {
 		t.Errorf("the first key: status %d, want 429", got)
 	}
 }
+
+func TestTransferCountsRestore(t *testing.T) {
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	old, restarted := newTestServer(t), newTestServer(t)
+	for _, s := range []*Server{old, restarted} {
+		s.transfer.now = func() time.Time { return now }
+	}
+	old.transfer.add([]string{"192.0.2.1"}, 300, 1000)
+
+	day, counts := old.TransferCounts()
+	if !day.Equal(time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)) || counts["192.0.2.1"] != 300 {
+		t.Fatalf("TransferCounts() = %v, %v", day, counts)
+	}
+	if !restarted.RestoreTransferCounts(day, counts) || restarted.transfer.used([]string{"192.0.2.1"}) != 300 {
+		t.Error("today's counts weren't restored")
+	}
+	if restarted.RestoreTransferCounts(day.AddDate(0, 0, -1), counts) {
+		t.Error("yesterday's counts were restored")
+	}
+}
+
+func TestOnStop(t *testing.T) {
+	s, err := New(t.TempDir()+"/host_key", config.DefaultDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ran := 0
+	s.OnStop(func() { ran++ })
+	s.Stop()
+	if ran != 1 {
+		t.Errorf("OnStop ran %d times, want once", ran)
+	}
+}

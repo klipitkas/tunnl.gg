@@ -2,6 +2,7 @@ package server
 
 import (
 	"log"
+	"maps"
 	"strconv"
 	"sync"
 	"time"
@@ -76,6 +77,33 @@ func (m *transferMeter) used(keys []string) int64 {
 		most = max(most, m.bytes[k])
 	}
 	return most
+}
+
+// TransferCounts returns the bytes each tunnel owner sent through its tunnels
+// today, by key, and the UTC day they're for, to keep them across restarts
+// with RestoreTransferCounts.
+func (s *Server) TransferCounts() (day time.Time, counts map[string]int64) {
+	m := s.transfer
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.today()
+	return time.Unix(m.day*86400, 0).UTC(), maps.Clone(m.bytes)
+}
+
+// RestoreTransferCounts adds counts saved by TransferCounts, if they're for
+// today, and reports whether they were.
+func (s *Server) RestoreTransferCounts(day time.Time, counts map[string]int64) bool {
+	m := s.transfer
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.today()
+	if day.Unix()/86400 != m.day || day.Unix()%86400 != 0 {
+		return false
+	}
+	for k, n := range counts {
+		m.bytes[k] += n
+	}
+	return true
 }
 
 // untilReset is how long until the counts start over, at midnight UTC.
