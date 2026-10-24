@@ -32,6 +32,9 @@ func TestTransferMeter(t *testing.T) {
 	if m.add([]string{"c"}, 10, 0); m.bytes["c"] != 0 {
 		t.Error("counted without a limit")
 	}
+	if got := m.used(ab); got != 110 {
+		t.Errorf("used() = %d, want 110", got)
+	}
 	if got := m.untilReset(); got != time.Hour {
 		t.Errorf("untilReset() = %v, want 1h", got)
 	}

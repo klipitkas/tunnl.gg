@@ -31,10 +31,10 @@ func TestExpiryText(t *testing.T) {
 
 func TestSessionBannerUpgradeNote(t *testing.T) {
 	limits := config.FreeLimits()
-	plain := sessionBanner("https://x.example.com", "example.com", "note", limits, tunnel.Options{})
+	plain := sessionBanner("https://x.example.com", "example.com", "note", limits, 0, tunnel.Options{})
 
 	limits.UpgradeNote = "Pro: no time limits at https://example.com/pricing"
-	withNote := sessionBanner("https://x.example.com", "example.com", "note", limits, tunnel.Options{})
+	withNote := sessionBanner("https://x.example.com", "example.com", "note", limits, 0, tunnel.Options{})
 	if !strings.Contains(withNote, limits.UpgradeNote) {
 		t.Errorf("banner is missing the upgrade note:\n%s", withNote)
 	}
@@ -44,5 +44,17 @@ func TestSessionBannerUpgradeNote(t *testing.T) {
 	}
 	if strings.Contains(plain, "Pro") {
 		t.Errorf("banner without a note mentions Pro:\n%s", plain)
+	}
+}
+
+func TestSessionBannerTransfer(t *testing.T) {
+	limits := config.FreeLimits()
+	banner := sessionBanner("https://x.example.com", "example.com", "note", limits, 1536, tunnel.Options{})
+	if !strings.Contains(banner, "Transfer") || !strings.Contains(banner, "5 GB a day") || !strings.Contains(banner, "1.5 KB used today") {
+		t.Errorf("banner is missing the daily transfer:\n%s", banner)
+	}
+	limits.DailyTransfer = 0
+	if banner := sessionBanner("https://x.example.com", "example.com", "note", limits, 0, tunnel.Options{}); strings.Contains(banner, "Transfer") {
+		t.Errorf("banner shows a transfer limit without one:\n%s", banner)
 	}
 }

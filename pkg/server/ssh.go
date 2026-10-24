@@ -308,10 +308,10 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	}
 	var logger *tunnel.RequestLogger
 	if opts.JSON {
-		fmt.Fprint(channel, sessionJSON(url, sub, stable, strings.Trim(nameNote, " ()"), limits, shown))
+		fmt.Fprint(channel, sessionJSON(url, sub, stable, strings.Trim(nameNote, " ()"), limits, s.transfer.used(tun.TransferKeys), shown))
 		logger = tunnel.NewJSONRequestLogger(channel, config.LogBufferSize)
 	} else {
-		fmt.Fprint(channel, sessionBanner(url, s.domain, urlNote(stable, acct, sub)+nameNote, limits, shown))
+		fmt.Fprint(channel, sessionBanner(url, s.domain, urlNote(stable, acct, sub)+nameNote, limits, s.transfer.used(tun.TransferKeys), shown))
 		logger = tunnel.NewRequestLogger(channel, config.LogBufferSize)
 	}
 	tun.SetLogger(logger)
@@ -445,10 +445,10 @@ const (
 	bannerPurple = "\033[38;5;141m"
 )
 
-// sessionBanner is shown when a tunnel goes live: its URL, expiry and
-// options, a QR code of the URL, and the header of the request log that
-// follows.
-func sessionBanner(url, domain, urlNote string, limits config.Limits, opts tunnel.Options) string {
+// sessionBanner is shown when a tunnel goes live: its URL, expiry, daily
+// transfer (used is what its owner sent today) and options, a QR code of the
+// URL, and the header of the request log that follows.
+func sessionBanner(url, domain, urlNote string, limits config.Limits, used int64, opts tunnel.Options) string {
 	label := func(name string) string {
 		return bannerGray + fmt.Sprintf("  %-9s", name) + bannerReset
 	}
@@ -458,6 +458,10 @@ func sessionBanner(url, domain, urlNote string, limits config.Limits, opts tunne
 		label("URL") + bannerPurple + url + bannerReset + "\r\n" +
 		label("") + bannerGray + urlNote + bannerReset + "\r\n" +
 		label("Expires") + expiryText(limits) + "\r\n"
+	if limits.DailyTransfer > 0 {
+		banner += label("Transfer") + formatLimit(limits.DailyTransfer) + " a day" +
+			bannerGray + ", " + tunnel.FormatBytes(used) + " used today (resets at 00:00 UTC)" + bannerReset + "\r\n"
+	}
 	if limits.UpgradeNote != "" {
 		banner += label("") + bannerGray + limits.UpgradeNote + bannerReset + "\r\n"
 	}
@@ -558,7 +562,7 @@ func readOptions(reqs <-chan *ssh.Request, limits config.Limits) (tunnel.Options
 // urlNote explains in the session banner whether the URL stays the same.
 // sessionJSON is the banner for output=json: one line describing the tunnel,
 // for scripts and AI agents. Requests and notices follow as lines of their own.
-func sessionJSON(url, sub string, stable bool, warning string, limits config.Limits, opts tunnel.Options) string {
+func sessionJSON(url, sub string, stable bool, warning string, limits config.Limits, used int64, opts tunnel.Options) string {
 	return tunnel.JSONLine(struct {
 		Event              string   `json:"event"` // "tunnel"
 		URL                string   `json:"url"`
@@ -566,6 +570,8 @@ func sessionJSON(url, sub string, stable bool, warning string, limits config.Lim
 		Stable             bool     `json:"stable"` // the same URL on every reconnect
 		IdleTimeoutSeconds int64    `json:"idle_timeout_seconds"`
 		MaxLifetimeSeconds int64    `json:"max_lifetime_seconds"` // 0: no limit
+		DailyTransferBytes int64    `json:"daily_transfer_bytes"` // 0: no limit; resets at 00:00 UTC
+		TransferUsedBytes  int64    `json:"transfer_used_bytes"`  // sent today
 		Options            []string `json:"options,omitempty"`
 		Warning            string   `json:"warning,omitempty"`
 		Upgrade            string   `json:"upgrade,omitempty"`
@@ -576,6 +582,8 @@ func sessionJSON(url, sub string, stable bool, warning string, limits config.Lim
 		Stable:             stable,
 		IdleTimeoutSeconds: int64(limits.InactivityTimeout / time.Second),
 		MaxLifetimeSeconds: int64(limits.MaxLifetime / time.Second),
+		DailyTransferBytes: limits.DailyTransfer,
+		TransferUsedBytes:  used,
 		Options:            opts.Names(),
 		Warning:            warning,
 		Upgrade:            limits.UpgradeNote,

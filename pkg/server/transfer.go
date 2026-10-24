@@ -66,6 +66,18 @@ func (m *transferMeter) add(keys []string, n, limit int64) (reached bool) {
 	return reached
 }
 
+// used is the most any of keys sent today.
+func (m *transferMeter) used(keys []string) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.today()
+	var most int64
+	for _, k := range keys {
+		most = max(most, m.bytes[k])
+	}
+	return most
+}
+
 // untilReset is how long until the counts start over, at midnight UTC.
 func (m *transferMeter) untilReset() time.Duration {
 	now := m.now().UTC()
