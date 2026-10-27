@@ -73,6 +73,12 @@ func Parse(spec string) (*Resolver, error) {
 	return r, nil
 }
 
+// TrustsCloudflare reports whether r trusts Cloudflare's edge, that is,
+// whether the server is meant to be behind Cloudflare.
+func (r *Resolver) TrustsCloudflare() bool {
+	return r != nil && len(r.cloudflare) > 0
+}
+
 func parsePrefix(s string) (netip.Prefix, error) {
 	if strings.Contains(s, "/") {
 		prefix, err := netip.ParsePrefix(s)

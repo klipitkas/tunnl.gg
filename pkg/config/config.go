@@ -73,6 +73,14 @@ const (
 	StatsWriteTimeout      = 5 * time.Second
 	ShutdownTimeout        = 10 * time.Second
 
+	// Behind Cloudflare, visitors' HTTPS connections come from its edge, which
+	// keeps an idle connection to the origin for 900 seconds and then closes
+	// it. Waiting a little longer leaves the close to Cloudflare, so it can
+	// reuse its connections instead of making new TLS ones every 2 minutes,
+	// and never sends a request on a connection the server is closing.
+	CloudflareProxyIdleTimeout       = 900 * time.Second
+	HTTPSIdleTimeoutBehindCloudflare = CloudflareProxyIdleTimeout + 10*time.Second
+
 	// Proxied requests replace the HTTPS read/write timeouts with an idle
 	// timeout, so long polls, streams and slow uploads work while they make
 	// progress. A request is canceled after this long without progress.

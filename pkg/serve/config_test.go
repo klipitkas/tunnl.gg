@@ -3,7 +3,9 @@ package serve
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/klipitkas/tunnl.gg/pkg/clientip"
 	"github.com/klipitkas/tunnl.gg/pkg/config"
 )
 
@@ -35,5 +37,28 @@ func TestPositiveCapacityEnvironment(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestHTTPSIdleTimeout(t *testing.T) {
+	for spec, want := range map[string]time.Duration{
+		"":                      config.HTTPSIdleTimeout,
+		"10.0.0.0/8":            config.HTTPSIdleTimeout,
+		"cloudflare":            config.HTTPSIdleTimeoutBehindCloudflare,
+		"cloudflare,10.0.0.0/8": config.HTTPSIdleTimeoutBehindCloudflare,
+	} {
+		trusted, err := clientip.Parse(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := httpsIdleTimeout(trusted); got != want {
+			t.Errorf("TRUSTED_PROXIES=%q: idle timeout %v, want %v", spec, got, want)
+		}
+	}
+	if config.HTTPSIdleTimeoutBehindCloudflare <= config.CloudflareProxyIdleTimeout {
+		t.Error("behind Cloudflare, the server must wait longer than Cloudflare to close idle connections")
+	}
+	if got := httpsIdleTimeout(nil); got != config.HTTPSIdleTimeout {
+		t.Errorf("no resolver: idle timeout %v, want %v", got, config.HTTPSIdleTimeout)
 	}
 }

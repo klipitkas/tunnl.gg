@@ -481,6 +481,11 @@ from [cloudflare.com/ips](https://www.cloudflare.com/ips/)). Other entries trust
 themselves are ignored. Headers from any other address are ignored too, so list only
 proxies you control, and firewall ports 80 and 443 so only they can reach the server.
 
+With `cloudflare` trusted, idle HTTPS connections stay open for 910 seconds instead of
+120, just past the 900 seconds Cloudflare keeps an idle connection to the origin. Cloudflare
+then closes them itself and reuses them until it does, instead of making a new TLS
+connection after every 2 idle minutes.
+
 ## Stats endpoint
 
 Server statistics, on localhost only:

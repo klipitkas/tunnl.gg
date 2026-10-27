@@ -106,6 +106,7 @@ func Main(opts Options) {
 	if cfg.TrustedProxies != "" {
 		log.Printf("Trusting client IP headers from proxies: %s", cfg.TrustedProxies)
 	}
+	log.Printf("HTTPS connections close after %v idle", httpsIdleTimeout(trustedProxies))
 
 	srv, err := server.New(cfg.HostKeyPath, cfg.Domain)
 	if err != nil {
@@ -186,7 +187,7 @@ func Main(opts Options) {
 		ReadHeaderTimeout: config.HTTPSReadHeaderTimeout,
 		ReadTimeout:       config.HTTPSReadTimeout,
 		WriteTimeout:      config.HTTPSWriteTimeout,
-		IdleTimeout:       config.HTTPSIdleTimeout,
+		IdleTimeout:       httpsIdleTimeout(trustedProxies),
 		MaxHeaderBytes:    1 << 20,
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
@@ -280,4 +281,13 @@ func Main(opts Options) {
 
 	srv.Stop()
 	log.Println("Shutdown complete")
+}
+
+// httpsIdleTimeout is how long an idle HTTPS connection stays open: past
+// Cloudflare's own idle timeout when the server is behind Cloudflare.
+func httpsIdleTimeout(trusted *clientip.Resolver) time.Duration {
+	if trusted.TrustsCloudflare() {
+		return config.HTTPSIdleTimeoutBehindCloudflare
+	}
+	return config.HTTPSIdleTimeout
 }

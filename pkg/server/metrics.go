@@ -82,8 +82,9 @@ var (
 	// WebSockets last up to their 2-hour idle timeout
 	sessionBuckets = []int64{1e9, 10e9, 60e9, 300e9, 900e9, 1800e9, 3600e9, 7200e9}
 	// Idle connections, around the timeouts that may close them: Node's 5s
-	// keep-alive in a tunneled app, the tunnel pool's 90s, HTTPS's 120s
-	idleBuckets = []int64{100e6, 1e9, 4e9, 6e9, 15e9, 30e9, 60e9, 85e9, 95e9, 115e9, 125e9, 300e9, 900e9}
+	// keep-alive in a tunneled app, the tunnel pool's 90s, HTTPS's 120s, and
+	// behind Cloudflare its edge's 900s and HTTPS's 910s
+	idleBuckets = []int64{100e6, 1e9, 4e9, 6e9, 15e9, 30e9, 60e9, 85e9, 95e9, 115e9, 125e9, 300e9, 600e9, 895e9, 905e9, 915e9}
 	// Requests per tunnel per minute; 3,000 is a tunnel's sustained rate limit
 	rateBuckets = []int64{0, 1, 2, 5, 10, 30, 60, 300, 600, 1500, 3000, 6000}
 )
@@ -525,7 +526,7 @@ func (s *Server) writeMetrics(w io.Writer) {
 			p.value("tunnl_https_connections_first_request_total", "protocol="+label(protocol)+",resumed="+label(r), m.httpsFirst[h2][resumed].Load())
 		}
 	}
-	p.histogram("tunnl_https_connection_idle_at_close_seconds", "HTTPS connections that closed while idle, by how long they had been idle; about 120s is the server's idle timeout.", &m.httpsIdleAtClose, idleBuckets, 1e9)
+	p.histogram("tunnl_https_connection_idle_at_close_seconds", "HTTPS connections that closed while idle, by how long they had been idle: about 120s is the server's idle timeout, or behind Cloudflare about 900s Cloudflare's and 910s the server's.", &m.httpsIdleAtClose, idleBuckets, 1e9)
 	p.header("tunnl_https_requests_total", "counter", "Tunnel requests by protocol.")
 	for h2, protocol := range protocols {
 		p.value("tunnl_https_requests_total", "protocol="+label(protocol), m.httpsRequests[h2].Load())
@@ -548,7 +549,7 @@ func (s *Server) writeMetrics(w io.Writer) {
 	p.header("tunnl_channel_open_failures_total", "counter", "Channel opens that failed, by reason.")
 	p.value("tunnl_channel_open_failures_total", `reason="refused"`, m.channelRefused.Load())
 	p.value("tunnl_channel_open_failures_total", `reason="failed"`, m.channelFailed.Load())
-	p.histogram("tunnl_pooled_channel_closed_by_tunnl_idle_seconds", "Channels kept for reuse that tunnl closed, by how long they were idle: about 90s is the pool's idle timeout, about 0 a full pool or a failed request.", &m.pooledClosed[0], idleBuckets, 1e9)
+	p.histogram("tunnl_pooled_channel_closed_by_tunnl_idle_seconds", "Channels kept for reuse that tunnl closed, by how long they were idle: about 90s is the pool's idle timeout; about 0 mostly an app that answers with Connection: close (or HTTP/1.0), so the channel can't be reused, else a full pool or a failed request.", &m.pooledClosed[0], idleBuckets, 1e9)
 	p.histogram("tunnl_pooled_channel_closed_by_app_idle_seconds", "Channels kept for reuse that the tunnel client closed, when the app closed its connection, by how long they were idle.", &m.pooledClosed[1], idleBuckets, 1e9)
 
 	p.header("tunnl_websockets_total", "counter", "WebSocket upgrades relayed to the app, and those whose channel failed.")
