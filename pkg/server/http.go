@@ -105,7 +105,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// can still go over it by up to the body size limits
 	if s.transfer.over(tun.TransferKeys, tun.Limits.DailyTransfer) {
 		if isBrowserRequest(r) {
-			s.logTunnlEvent(tun, r, client, http.StatusTemporaryRedirect, answerDailyTransfer, "the tunnel reached its daily transfer limit: browser sent to the limit page")
+			s.logTunnlEvent(tun, r, client, pageRedirectStatus(r), answerDailyTransfer, "the tunnel reached its daily transfer limit: browser sent to the limit page")
 			s.redirectToLimitPage(w, r, sub, tun.Limits.TransferNote != "")
 			return
 		}
@@ -164,7 +164,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if tun.Limits.BrowserWarning && isBrowserRequest(r) &&
 		r.Header.Get("tunnl-skip-browser-warning") == "" &&
 		!hasWarningCookie(r, sub, tun.Stable) {
-		s.logTunnlEvent(tun, r, client, http.StatusTemporaryRedirect, answerWarningPage, "browser sent to the warning page")
+		s.logTunnlEvent(tun, r, client, pageRedirectStatus(r), answerWarningPage, "browser sent to the warning page")
 		s.redirectToWarningPage(w, r, sub, tun.Stable)
 		return
 	}
@@ -682,7 +682,7 @@ func (s *Server) redirectToWarningPage(w http.ResponseWriter, r *http.Request, s
 		// The warning page then remembers it for a week instead of a day
 		warningURL += "&stable=1"
 	}
-	http.Redirect(w, r, warningURL, http.StatusTemporaryRedirect)
+	http.Redirect(w, r, warningURL, pageRedirectStatus(r))
 }
 
 // redirectToLimitPage sends a browser to the site's page saying the tunnel
@@ -695,7 +695,18 @@ func (s *Server) redirectToLimitPage(w http.ResponseWriter, r *http.Request, sub
 	if upgrade {
 		limitURL += "&upgrade=1"
 	}
-	http.Redirect(w, r, limitURL, http.StatusTemporaryRedirect)
+	http.Redirect(w, r, limitURL, pageRedirectStatus(r))
+}
+
+// pageRedirectStatus is the status for sending a browser to one of the
+// site's pages. A 307 keeps the method and body, so a form post, such as a
+// login provider's tokens, would be posted again to tunnl.gg; for anything
+// but GET and HEAD a 303 has the browser load the page with GET instead.
+func pageRedirectStatus(r *http.Request) int {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return http.StatusTemporaryRedirect
+	}
+	return http.StatusSeeOther
 }
 
 func isWebSocketRequest(r *http.Request) bool {

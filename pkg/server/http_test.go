@@ -429,6 +429,37 @@ func TestRedirectToWarningPage(t *testing.T) {
 	if loc := w.Header().Get("Location"); !strings.HasSuffix(loc, "&stable=1") {
 		t.Errorf("Location for a stable subdomain = %q, want it to end with &stable=1", loc)
 	}
+
+	// A 307 would post the form again to tunnl.gg, which answers 405
+	r = httptest.NewRequest(http.MethodPost, "https://happy-tiger-abcdef01.tunnl.gg/auth/callback", strings.NewReader("code=c&state=s"))
+	r.Host = "happy-tiger-abcdef01.tunnl.gg"
+	w = httptest.NewRecorder()
+	s.redirectToWarningPage(w, r, sub, false)
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("status for a POST = %d, want %d", w.Code, http.StatusSeeOther)
+	}
+}
+
+func TestPageRedirectStatus(t *testing.T) {
+	tests := []struct {
+		method string
+		want   int
+	}{
+		{http.MethodGet, http.StatusTemporaryRedirect},
+		{http.MethodHead, http.StatusTemporaryRedirect},
+		{http.MethodPost, http.StatusSeeOther},
+		{http.MethodPut, http.StatusSeeOther},
+		{http.MethodDelete, http.StatusSeeOther},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.method, func(t *testing.T) {
+			r := httptest.NewRequest(tt.method, "https://happy-tiger-abcdef01.tunnl.gg/", nil)
+			if got := pageRedirectStatus(r); got != tt.want {
+				t.Errorf("pageRedirectStatus(%s) = %d, want %d", tt.method, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestVisitorKey(t *testing.T) {
@@ -510,5 +541,49 @@ func TestServeHTTP_BrowserWarningFollowsLimits(t *testing.T) {
 	tt.srv.GetTunnel(tt.sub).Limits.BrowserWarning = false
 	if code := request(); code != http.StatusOK {
 		t.Errorf("browser on a tunnel without the warning got status %d, want %d", code, http.StatusOK)
+	}
+}
+
+// Sign in with Apple and other form_post logins come back as a cross-site
+// POST. With the cookie the post must reach the app intact; without it the
+// browser is sent to the warning page with GET.
+func TestServeHTTP_BrowserWarningOnFormPost(t *testing.T) {
+	var gotBody string
+	tt := startTestTunnel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	post := func(cookie *http.Cookie) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "https://"+tt.sub+"."+config.DefaultDomain+"/auth/apple/callback", strings.NewReader("code=c&state=s"))
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", "https://appleid.apple.com")
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		rec := httptest.NewRecorder()
+		tt.srv.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := post(nil)
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("form post without the cookie got status %d, want %d", rec.Code, http.StatusSeeOther)
+	}
+	if loc := rec.Header().Get("Location"); !strings.HasPrefix(loc, "https://tunnl.gg/#/warning?") {
+		t.Errorf("Location = %q, want the warning page", loc)
+	}
+	if gotBody != "" {
+		t.Errorf("app got %q before the visitor accepted the warning", gotBody)
+	}
+
+	rec = post(&http.Cookie{Name: config.WarningCookieName + "_" + tt.sub, Value: "1"})
+	if rec.Code != http.StatusOK {
+		t.Errorf("form post with the cookie got status %d, want %d", rec.Code, http.StatusOK)
+	}
+	if gotBody != "code=c&state=s" {
+		t.Errorf("app got body %q, want the form post", gotBody)
 	}
 }
