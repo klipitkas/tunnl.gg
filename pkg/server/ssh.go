@@ -58,6 +58,11 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	conn.SetDeadline(time.Time{}) // clear deadline after successful handshake
 	defer sshConn.Close()
 
+	if key := commandKey(sshConn); key != nil {
+		s.runKeyCommand(sshConn, chans, reqs, clientIP, key)
+		return
+	}
+
 	// Check rate limits and reservations after handshake
 	acct := connAccount(sshConn)
 	slot, err := s.CheckAndReserveConnection(clientIP, acct)
@@ -670,38 +675,67 @@ func (s *Server) endHandshake(clientIP string) {
 // sendErrorAndClose sends an error message to the client and closes the connection
 // This is used when the connection is rejected after SSH handshake (e.g., IP blocked)
 func (s *Server) sendErrorAndClose(sshConn *ssh.ServerConn, chans <-chan ssh.NewChannel, errMsg string) {
-	// Wait for session channel with short timeout
+	s.sendAndClose(sshConn, chans, fmt.Sprintf("\r\n  ERROR: %s\r\n\r\n", errMsg), 1)
+}
+
+// sendAndClose shows text, with \r\n line endings, in the client's session,
+// then ends the session with exitStatus, so ssh exits with it.
+func (s *Server) sendAndClose(sshConn *ssh.ServerConn, chans <-chan ssh.NewChannel, text string, exitStatus uint32) {
+	// One deadline for all of it, so a client that never opens a session,
+	// asks for a shell or hangs up holds the connection no longer
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	var newChannel ssh.NewChannel
 	select {
-	case newChannel, ok := <-chans:
+	case ch, ok := <-chans:
 		if !ok {
 			return
 		}
-		if newChannel.ChannelType() != "session" {
-			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
-			return
-		}
-		channel, requests, err := newChannel.Accept()
-		if err != nil {
-			return
-		}
-		// Handle pty-req and shell requests so the message displays properly
-		go func() {
-			for req := range requests {
-				if req.Type == "pty-req" || req.Type == "shell" {
-					if req.WantReply {
-						req.Reply(true, nil)
-					}
-				} else if req.WantReply {
-					req.Reply(false, nil)
-				}
-			}
-		}()
-		// Send error message
-		fmt.Fprintf(channel, "\r\n  ERROR: %s\r\n\r\n", errMsg)
-		channel.Close()
-	case <-time.After(3 * time.Second):
-		// Client didn't send session channel in time
+		newChannel = ch
+	case <-deadline.C:
 		return
+	}
+	if newChannel.ChannelType() != "session" {
+		newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+		return
+	}
+	channel, requests, err := newChannel.Accept()
+	if err != nil {
+		return
+	}
+	// Write once the client asked for a shell or a command, as in
+	// "ssh user@host command": closing before then can leave its requests
+	// unanswered, and some clients then show nothing.
+	started := make(chan struct{})
+	go func() {
+		var once sync.Once
+		for req := range requests {
+			ok := req.Type == "pty-req" || req.Type == "shell" || req.Type == "exec"
+			if req.WantReply {
+				req.Reply(ok, nil)
+			}
+			if req.Type == "shell" || req.Type == "exec" {
+				once.Do(func() { close(started) })
+			}
+		}
+	}()
+	select {
+	case <-started:
+	case <-deadline.C:
+	}
+	fmt.Fprint(channel, text)
+	channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{exitStatus}))
+	channel.Close()
+	// Let the client hang up first, so ssh doesn't report the connection
+	// closed by the server
+	hungUp := make(chan struct{})
+	go func() {
+		_ = sshConn.Wait() // it only says how the connection ended
+		close(hungUp)
+	}()
+	select {
+	case <-hungUp:
+	case <-deadline.C:
 	}
 }
 

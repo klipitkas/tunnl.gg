@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 
 	"golang.org/x/crypto/ssh"
 
@@ -21,12 +22,15 @@ const (
 var errStableNeedsKey = errors.New("the stable user requires an SSH key")
 
 // authNone accepts clients without a key, as long as they didn't connect as
-// the stable user, or as the account user on a server with accounts. That
+// the stable user, a key command's user, or the account user on a server
+// with accounts. That
 // keeps every existing client working unchanged: it never asks for a key or
 // prompts for anything. Those users are refused, so their clients fall back
 // to offering their SSH keys.
 func (s *Server) authNone(conn ssh.ConnMetadata) (*ssh.Permissions, error) {
 	switch {
+	case s.keyCommands[conn.User()] != nil:
+		return nil, fmt.Errorf("the %s user requires an SSH key", conn.User())
 	case conn.User() == config.StableSSHUser:
 		return nil, errStableNeedsKey
 	case conn.User() == config.AccountSSHUser && s.accounts != nil:
@@ -41,6 +45,9 @@ func (s *Server) authNone(conn ssh.ConnMetadata) (*ssh.Permissions, error) {
 // grants these permissions once the client has proven it holds the private
 // key.
 func (s *Server) authPublicKey(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+	if s.keyCommands[conn.User()] != nil {
+		return authKeyCommand(key), nil
+	}
 	if conn.User() == config.AccountSSHUser && s.accounts != nil {
 		return s.authAccount(key)
 	}

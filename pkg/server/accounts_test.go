@@ -40,10 +40,7 @@ func withAccounts(s *Server, keys []ssh.Signer, accts []*Account) *fakeAccounts 
 
 // accountClient connects as the account user with key.
 func accountClient(key ssh.Signer) *ssh.ClientConfig {
-	cfg := anonymousClient()
-	cfg.User = config.AccountSSHUser
-	cfg.Auth = []ssh.AuthMethod{ssh.PublicKeys(key)}
-	return cfg
+	return keyClient(config.AccountSSHUser, key)
 }
 
 var proLimits = config.Limits{MaxTunnels: 2}

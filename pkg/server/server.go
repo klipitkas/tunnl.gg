@@ -44,6 +44,7 @@ type Server struct {
 	accountConns    map[string][]*ssh.ServerConn // SSH connections per account ID for forced closure
 	keyConns        map[string][]*ssh.ServerConn // SSH connections per client key fingerprint for forced closure
 	accounts        AccountStore                 // nil unless the deployment has accounts
+	keyCommands     map[string]KeyCommand        // by SSH user; see SetKeyCommand
 	freeLimits      config.Limits                // for anonymous clients; see SetFreeLimits
 	trafficSink     func(TrafficReport)          // see SetTrafficSink
 	trafficStop     chan struct{}
@@ -202,6 +203,9 @@ func (s *Server) claimSubdomain(sub string, conn sshConnection, owner string) (h
 	return nil, false
 }
 
+// errConnectionRate refuses a connection over the IP's connection rate.
+var errConnectionRate = fmt.Errorf("connection rate limit exceeded: max %d connections per minute. Repeated violations will result in a temporary block", config.MaxConnectionsPerMinute)
+
 // CheckAndReserveConnection checks if a new connection from the given IP, on
 // behalf of acct if it isn't nil, is allowed and atomically reserves a slot if
 // so. Anonymous clients are limited per IP, accounts per account. If it
@@ -216,7 +220,7 @@ func (s *Server) CheckAndReserveConnection(clientIP string, acct *Account) (slot
 
 	// Check connection rate limit
 	if !s.abuseTracker.CheckConnectionRate(clientIP) {
-		return "", fmt.Errorf("connection rate limit exceeded: max %d connections per minute. Repeated violations will result in a temporary block", config.MaxConnectionsPerMinute)
+		return "", errConnectionRate
 	}
 
 	// A zero limit means no limit for accounts. The prefix keeps account IDs

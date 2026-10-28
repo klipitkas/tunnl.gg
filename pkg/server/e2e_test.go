@@ -92,10 +92,7 @@ func anonymousClient() *ssh.ClientConfig {
 
 // stableClient connects as the stable user with key.
 func stableClient(key ssh.Signer) *ssh.ClientConfig {
-	cfg := anonymousClient()
-	cfg.User = config.StableSSHUser
-	cfg.Auth = []ssh.AuthMethod{ssh.PublicKeys(key)}
-	return cfg
+	return keyClient(config.StableSSHUser, key)
 }
 
 func dialSSH(addr string) (*ssh.Client, error) {
