@@ -45,6 +45,7 @@ var (
 	errAccountNeedsKey = errors.New("the account user requires an SSH key")
 	errUnknownKey      = errors.New("the SSH key doesn't belong to an account")
 	errAccountLookup   = errors.New("the account couldn't be looked up")
+	errSubdomainDenied = errors.New("this subdomain isn't available on this server")
 )
 
 // SetAccounts lets clients connect as config.AccountSSHUser with an
@@ -169,6 +170,9 @@ func (s *Server) claimForward(conn *ssh.ServerConn, acct *Account, bindAddr stri
 			if !ok {
 				return "", false, tunnel.Options{}, "", fmt.Errorf("%s isn't one of your account's subdomains: reserve it in the dashboard first, or leave it out for your key's default", name)
 			}
+			if s.subdomainDenied(name) {
+				return "", false, tunnel.Options{}, "", errSubdomainDenied
+			}
 			if !s.claimStableSubdomain(name, conn, "account:"+acct.ID) {
 				return "", false, tunnel.Options{}, "", fmt.Errorf("%s is in use and couldn't be taken over: try again in a moment", name)
 			}
@@ -177,6 +181,10 @@ func (s *Server) claimForward(conn *ssh.ServerConn, acct *Account, bindAddr stri
 	}
 	if perms := conn.Permissions; perms != nil && perms.Extensions[permStableSubdomain] != "" {
 		sub = perms.Extensions[permStableSubdomain]
+		// Refused, not given a random one: the key is what's denied
+		if s.subdomainDenied(sub) {
+			return "", false, tunnel.Options{}, "", errSubdomainDenied
+		}
 		stable = s.claimStableSubdomain(sub, conn, perms.Extensions[permOwner])
 	}
 	if !stable {

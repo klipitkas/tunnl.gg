@@ -36,6 +36,7 @@ type subdomainOwner struct {
 type Server struct {
 	tunnels         map[string]*tunnel.Tunnel
 	owners          map[string]subdomainOwner // every reserved or registered subdomain
+	denied          map[string]bool           // see SetDeniedSubdomains
 	slots           map[string]int            // reserved connection slots per IP or account
 	totalReserved   int                       // reserved connection slots server-wide
 	maxTotalTunnels int                       // configured reservation cap, guarded by mu
@@ -174,7 +175,7 @@ func (s *Server) ReserveSubdomain(conn sshConnection) (string, error) {
 		}
 
 		s.mu.Lock()
-		if _, held := s.owners[sub]; !held {
+		if _, held := s.owners[sub]; !held && !s.denied[sub] {
 			s.owners[sub] = subdomainOwner{conn: conn}
 			s.mu.Unlock()
 			return sub, nil
@@ -344,6 +345,7 @@ type TunnelInfo struct {
 	Subdomain string
 	ClientIP  string // grouped by /64 for IPv6, like the per-IP limits
 	AccountID string // "" for anonymous clients
+	Stable    bool   // the subdomain stays with its key or account across reconnects
 	CreatedAt time.Time
 }
 
@@ -353,9 +355,41 @@ func (s *Server) Tunnels() []TunnelInfo {
 	defer s.mu.RUnlock()
 	list := make([]TunnelInfo, 0, len(s.tunnels))
 	for _, t := range s.tunnels {
-		list = append(list, TunnelInfo{Subdomain: t.Subdomain, ClientIP: t.ClientIP, AccountID: t.AccountID, CreatedAt: t.CreatedAt})
+		list = append(list, TunnelInfo{Subdomain: t.Subdomain, ClientIP: t.ClientIP, AccountID: t.AccountID, Stable: t.Stable, CreatedAt: t.CreatedAt})
 	}
 	return list
+}
+
+// SetDeniedSubdomains replaces the subdomains no client may hold. A client
+// whose subdomain is denied is refused when it asks for a tunnel, and random
+// subdomains skip them. Tunnels already open stay open: close them with
+// CloseSubdomain, after this so their clients can't reconnect.
+func (s *Server) SetDeniedSubdomains(subs []string) {
+	denied := make(map[string]bool, len(subs))
+	for _, sub := range subs {
+		denied[sub] = true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.denied = denied
+}
+
+func (s *Server) subdomainDenied(sub string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.denied[sub]
+}
+
+// CloseSubdomain closes the SSH connection holding sub, if there is one, and
+// reports whether there was. Other connections of the same client stay open.
+func (s *Server) CloseSubdomain(sub string) bool {
+	s.mu.RLock()
+	owner, held := s.owners[sub]
+	s.mu.RUnlock()
+	if held {
+		_ = owner.conn.Close() // its cleanup releases sub
+	}
+	return held
 }
 
 // BanIP refuses SSH connections from ip until the given time and closes its
