@@ -272,6 +272,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			resp.Header.Set(robotsHeader, robotsNoIndex)
 			setCORS(resp.Header, corsAllow, corsCredentials)
+			if opts.Host != "" {
+				rewriteAppHost(resp.Header, opts.Host, r)
+			}
 
 			// Enforce response body size limit
 			if resp.ContentLength > config.MaxResponseBodySize {
@@ -736,6 +739,58 @@ func setForwardedHeaders(out http.Header, in *http.Request, client clientip.Resu
 	} else {
 		out.Set("X-Forwarded-Proto", "http")
 	}
+}
+
+// rewriteAppHost points a response back at the public host when the app was
+// sent host= instead. An app builds redirects and cookie domains from the Host
+// it sees, so without this a login redirect sends visitors to localhost.
+func rewriteAppHost(h http.Header, appHost string, in *http.Request) {
+	if loc := h.Get("Location"); loc != "" {
+		if u, err := url.Parse(loc); err == nil && u.Host != "" && sameHost(u, appHost) {
+			u.Host = in.Host
+			if u.Scheme != "" {
+				u.Scheme = "http"
+				if in.TLS != nil {
+					u.Scheme = "https"
+				}
+			}
+			h.Set("Location", u.String())
+		}
+	}
+
+	// A cookie for the app's domain would be refused by the browser; without
+	// Domain it belongs to the public host
+	appName := appHost
+	if name, _, err := net.SplitHostPort(appHost); err == nil {
+		appName = name
+	}
+	cookies := h.Values("Set-Cookie")
+	for i, c := range cookies {
+		attrs := strings.Split(c, ";")
+		kept := attrs[:1]
+		for _, a := range attrs[1:] {
+			name, value, _ := strings.Cut(strings.TrimSpace(a), "=")
+			if strings.EqualFold(name, "domain") && strings.EqualFold(strings.TrimPrefix(value, "."), appName) {
+				continue
+			}
+			kept = append(kept, a)
+		}
+		cookies[i] = strings.Join(kept, ";")
+	}
+}
+
+// sameHost reports whether u is on appHost, counting a missing port as the
+// scheme's default on either side.
+func sameHost(u *url.URL, appHost string) bool {
+	name, port := appHost, ""
+	if n, p, err := net.SplitHostPort(appHost); err == nil {
+		name, port = n, p
+	}
+	if !strings.EqualFold(u.Hostname(), name) {
+		return false
+	}
+	isDefault := func(p string) bool { return p == "" || p == "80" || p == "443" }
+	return u.Port() == port || (isDefault(u.Port()) && isDefault(port))
 }
 
 // originAddr returns the "ip:port" to report as a forwarded channel's origin:

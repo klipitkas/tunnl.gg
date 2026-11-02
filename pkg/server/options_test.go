@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +65,46 @@ func TestE2E_PasswordAllowlistAndHost(t *testing.T) {
 		out := tt.output.String()
 		return strings.Contains(out, "no or wrong password") && strings.Contains(out, "not on the tunnel's allowlist")
 	})
+}
+
+func TestE2E_HostRedirectsBackToPublicHost(t *testing.T) {
+	srv, addr := startSSHServer(t)
+	tt := openTunnelCommand(t, srv, addr, anonymousClient(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Set-Cookie", "session=1; Path=/; Domain="+r.Host+"; HttpOnly")
+		w.Header().Add("Set-Cookie", "other=1; Domain=example.com")
+		http.Redirect(w, r, r.URL.Query().Get("to"), http.StatusFound)
+	}), "host=myapp.test")
+
+	client := *tt.public.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	get := func(to string) *http.Response {
+		req, _ := http.NewRequest(http.MethodGet, tt.public.URL+"/?to="+url.QueryEscape(to), nil)
+		req.Host = tt.host()
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+
+	public := strings.SplitN(tt.public.URL, ":", 2)[0] + "://" + tt.host()
+	for to, want := range map[string]string{
+		"http://myapp.test/login?x=1": public + "/login?x=1",
+		"http://MyApp.test:80/":       public + "/",
+		"//myapp.test/a":              "//" + tt.host() + "/a",
+		"/dashboard":                  "/dashboard",
+		"http://myapp.test:8080/":     "http://myapp.test:8080/",
+		"https://accounts.example/":   "https://accounts.example/",
+	} {
+		if got := get(to).Header.Get("Location"); got != want {
+			t.Errorf("app redirect to %q: Location %q, want %q", to, got, want)
+		}
+	}
+	cookies := get("/").Header.Values("Set-Cookie")
+	if want := []string{"session=1; Path=/; HttpOnly", "other=1; Domain=example.com"}; strings.Join(cookies, "|") != strings.Join(want, "|") {
+		t.Errorf("Set-Cookie %q, want %q", cookies, want)
+	}
 }
 
 // runCommand connects anonymously with a tunnel request and command, and
