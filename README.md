@@ -19,7 +19,7 @@ ssh -t -R 80:localhost:8080 proxy.tunnl.gg
 This repository is the open-source (MIT) server behind [tunnl.gg](https://tunnl.gg). Use
 the hosted service for free, or run your own.
 
-**[Website](https://tunnl.gg)** · **[Docs](https://tunnl.gg/docs)** · **[Guides](https://tunnl.gg/guides)**
+**[Website](https://tunnl.gg)** · **[Docs](https://tunnl.gg/docs)** · **[Guides](https://tunnl.gg/guides)** · **[Sponsor](https://github.com/sponsors/klipitkas)**
 
 ## Contents
 
@@ -44,6 +44,7 @@ the hosted service for free, or run your own.
   - [Local development](#local-development)
   - [Make commands](#make-commands)
   - [Project structure](#project-structure)
+- [Support the project](#support-the-project)
 - [License](#license)
 
 # Using tunnl.gg
@@ -602,6 +603,12 @@ tunnl.gg/
 ```
 
 `ARCHITECTURE.md` describes the design in more depth.
+
+# Support the project
+
+The hosted service at tunnl.gg is free and run by one developer. If it saves you time,
+you can [sponsor it on GitHub](https://github.com/sponsors/klipitkas) or get
+[Pro](https://tunnl.gg/pricing); both keep the free tier running.
 
 # License
 
