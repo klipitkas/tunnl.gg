@@ -331,7 +331,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		tun.CountRequest(status, uploaded, sw.bytes, time.Since(requestStart))
 		s.countTransfer(tun, uploaded, sw.bytes)
-		s.metrics.requestDone(requestResult(sw.status, state.proxyErr, p != nil), time.Since(requestStart), uploaded, sw.bytes)
+		result := requestResult(sw.status, state.proxyErr, p != nil)
+		s.metrics.requestDone(result, time.Since(requestStart), uploaded, sw.bytes)
+		noteSignupOnFailure(tun, result)
 		if insp != nil {
 			insp.Add(tunnel.Exchange{
 				Time:           requestStart,
@@ -360,6 +362,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func logEntry(tun *tunnel.Tunnel, e tunnel.Entry) {
 	if logger := tun.Logger(); logger != nil {
 		logger.Log(e)
+	}
+}
+
+// noteSignupOnFailure shows the tunnel's SignupNote under its first request
+// that failed in the app or on the way to it, where seeing what was sent
+// would help: the moment an account's request inspector is worth having.
+// Visitors leaving (canceled) and oversized responses aren't the app's fault.
+func noteSignupOnFailure(tun *tunnel.Tunnel, result int) {
+	switch result {
+	case result5xx, resultAppRefused, resultDialTimeout, resultUnresponsive, resultCutOff, resultError:
+	default:
+		return
+	}
+	if tun.Limits.SignupNote == "" || tun.Limits.Inspect || !tun.FirstFailure() {
+		return
+	}
+	if logger := tun.Logger(); logger != nil {
+		logger.Notice(tun.Limits.SignupNote)
 	}
 }
 

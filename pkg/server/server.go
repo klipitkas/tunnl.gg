@@ -41,13 +41,14 @@ type Server struct {
 	totalReserved   int                       // reserved connection slots server-wide
 	maxTotalTunnels int                       // configured reservation cap, guarded by mu
 	newSubdomain    func() (string, error)
-	sshConns        map[string][]*ssh.ServerConn // SSH connections per IP for forced closure
-	accountConns    map[string][]*ssh.ServerConn // SSH connections per account ID for forced closure
-	keyConns        map[string][]*ssh.ServerConn // SSH connections per client key fingerprint for forced closure
-	accounts        AccountStore                 // nil unless the deployment has accounts
-	keyCommands     map[string]KeyCommand        // by SSH user; see SetKeyCommand
-	freeLimits      config.Limits                // for anonymous clients; see SetFreeLimits
-	trafficSink     func(TrafficReport)          // see SetTrafficSink
+	sshConns        map[string][]*ssh.ServerConn   // SSH connections per IP for forced closure
+	accountConns    map[string][]*ssh.ServerConn   // SSH connections per account ID for forced closure
+	keyConns        map[string][]*ssh.ServerConn   // SSH connections per client key fingerprint for forced closure
+	accounts        AccountStore                   // nil unless the deployment has accounts
+	keyCommands     map[string]KeyCommand          // by SSH user; see SetKeyCommand
+	signupNote      func(key ssh.PublicKey) string // see SetSignupNote
+	freeLimits      config.Limits                  // for anonymous clients; see SetFreeLimits
+	trafficSink     func(TrafficReport)            // see SetTrafficSink
 	trafficStop     chan struct{}
 	samplerStop     chan struct{} // stops sampling tunnels for the metrics
 	onStop          []func()      // see OnStop
@@ -113,9 +114,10 @@ func New(hostKeyPath string, domain string) (*Server, error) {
 	})
 
 	s.sshConfig = &ssh.ServerConfig{
-		NoClientAuth:         true,
-		NoClientAuthCallback: s.authNone,
-		PublicKeyCallback:    s.authPublicKey,
+		NoClientAuth:                true,
+		NoClientAuthCallback:        s.authNone,
+		PublicKeyCallback:           s.authPublicKey,
+		KeyboardInteractiveCallback: s.authNoKey,
 	}
 
 	hostKey, hostKeyPEM, err := loadOrGenerateHostKey(hostKeyPath)

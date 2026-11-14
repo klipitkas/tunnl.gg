@@ -316,7 +316,11 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		fmt.Fprint(channel, sessionJSON(url, sub, stable, strings.Trim(nameNote, " ()"), limits, s.transfer.used(tun.TransferKeys), shown))
 		logger = tunnel.NewJSONRequestLogger(channel, config.LogBufferSize)
 	} else {
-		fmt.Fprint(channel, sessionBanner(url, s.domain, urlNote(stable, acct, sub)+nameNote, limits, s.transfer.used(tun.TransferKeys), shown))
+		bannerLimits := limits
+		if acct == nil {
+			bannerLimits.SignupNote = s.keySignupNote(sshConn, limits.SignupNote)
+		}
+		fmt.Fprint(channel, sessionBanner(url, s.domain, urlNote(stable, acct, sub)+nameNote, bannerLimits, s.transfer.used(tun.TransferKeys), shown))
 		logger = tunnel.NewRequestLogger(channel, config.LogBufferSize)
 	}
 	tun.SetLogger(logger)
@@ -469,6 +473,9 @@ func sessionBanner(url, domain, urlNote string, limits config.Limits, used int64
 	}
 	if limits.UpgradeNote != "" {
 		banner += label("") + bannerGray + limits.UpgradeNote + bannerReset + "\r\n"
+	}
+	if limits.SignupNote != "" {
+		banner += label("Account") + bannerGray + limits.SignupNote + bannerReset + "\r\n"
 	}
 	if opts.Host != "" {
 		banner += label("Host") + opts.Host + bannerGray + " is sent to your app" + bannerReset + "\r\n"

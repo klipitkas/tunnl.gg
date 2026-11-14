@@ -40,6 +40,7 @@ type Tunnel struct {
 	optsReady      chan struct{}     // closed once opts are final or the tunnel closes; nil if never awaited
 	releaseOnce    sync.Once
 	closed         bool
+	failureNoted   atomic.Bool // see FirstFailure
 
 	// For failing fast once the client stops answering; see acquireOpen
 	lastOpenProgress  atomic.Int64  // when a channel open was last sent or answered, in Unix nanoseconds
@@ -175,6 +176,12 @@ func (t *Tunnel) SetLogger(l *RequestLogger) {
 	t.mu.Lock()
 	t.logger = l
 	t.mu.Unlock()
+}
+
+// FirstFailure reports whether this is the tunnel's first failed request,
+// for a hint shown once per tunnel: true the first time it's called only.
+func (t *Tunnel) FirstFailure() bool {
+	return t.failureNoted.CompareAndSwap(false, true)
 }
 
 // Logger returns the request logger, or nil if none is set

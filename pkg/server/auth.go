@@ -39,6 +39,26 @@ func (s *Server) authNone(conn ssh.ConnMetadata) (*ssh.Permissions, error) {
 	return &ssh.Permissions{}, nil
 }
 
+// authNoKey refuses keyboard-interactive authentication, which clients try
+// only once no key worked: none is refused for the stable user, and one with
+// keys would have been accepted by authPublicKey. So a stable client that
+// gets here has no key, and is told how to make one instead of only
+// "Permission denied". It asks nothing, so it never prompts.
+func (s *Server) authNoKey(conn ssh.ConnMetadata, _ ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+	if conn.User() != config.StableSSHUser {
+		return nil, errors.New("keyboard-interactive authentication is not used")
+	}
+	msg := "\r\n  " + s.domain + ": " + config.StableSSHUser + "@ keeps the same URL for your SSH key, but your SSH client\r\n" +
+		"  has no key to offer. Create one, then connect again:\r\n\r\n" +
+		"    ssh-keygen -t ed25519\r\n\r\n" +
+		"  Or connect without " + config.StableSSHUser + "@ for a random URL.\r\n"
+	// Only a hosted deployment sets one; open-source servers show just the help
+	if note := s.FreeLimits().SignupNote; note != "" {
+		msg += "  " + note + "\r\n"
+	}
+	return nil, &ssh.BannerError{Err: errStableNeedsKey, Message: msg + "\r\n"}
+}
+
 // authPublicKey accepts any key offered by the stable user. The key identifies
 // the client to give it a stable subdomain; it doesn't authorize anything.
 // The account user is handled by authAccount instead. x/crypto/ssh only
@@ -58,11 +78,42 @@ func (s *Server) authPublicKey(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.P
 	if err != nil {
 		return nil, err
 	}
-	return &ssh.Permissions{Extensions: map[string]string{
-		permOwner:           ssh.FingerprintSHA256(key),
-		permStableSubdomain: sub,
-		permKeyFingerprint:  ssh.FingerprintSHA256(key),
-	}}, nil
+	return &ssh.Permissions{
+		Extensions: map[string]string{
+			permOwner:           ssh.FingerprintSHA256(key),
+			permStableSubdomain: sub,
+			permKeyFingerprint:  ssh.FingerprintSHA256(key),
+		},
+		ExtraData: map[any]any{stableKey{}: key},
+	}, nil
+}
+
+// stableKey keys the Permissions.ExtraData entry holding the key a stable
+// client authenticated with.
+type stableKey struct{}
+
+// SetSignupNote sets what a client that connected with a key but without an
+// account sees in the banner instead of its Limits.SignupNote, e.g. a link
+// that adds that key to a new account. note returns "" to keep SignupNote.
+// Set it before serving.
+func (s *Server) SetSignupNote(note func(key ssh.PublicKey) string) {
+	s.signupNote = note
+}
+
+// keySignupNote is the SignupNote for conn's banner: SetSignupNote's for its
+// key, if it has one, else fallback.
+func (s *Server) keySignupNote(conn *ssh.ServerConn, fallback string) string {
+	if s.signupNote == nil || conn.Permissions == nil {
+		return fallback
+	}
+	key, _ := conn.Permissions.ExtraData[stableKey{}].(ssh.PublicKey)
+	if key == nil {
+		return fallback
+	}
+	if note := s.signupNote(key); note != "" {
+		return note
+	}
+	return fallback
 }
 
 // stableSubdomain derives a client key's subdomain. The key is public, so it
