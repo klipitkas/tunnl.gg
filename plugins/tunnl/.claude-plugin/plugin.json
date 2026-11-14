@@ -1,0 +1,16 @@
+{
+  "name": "tunnl",
+  "displayName": "tunnl.gg",
+  "version": "1.0.0",
+  "description": "Give a local dev server a public HTTPS URL with tunnl.gg over SSH, for webhooks, OAuth callbacks, previews and phone testing. Nothing to install, no account.",
+  "author": {
+    "name": "Konstantinos Lypitkas",
+    "url": "https://github.com/klipitkas"
+  },
+  "homepage": "https://tunnl.gg/guides/ai-coding-agents",
+  "repository": "https://github.com/klipitkas/tunnl.gg",
+  "license": "MIT",
+  "keywords": ["tunnel", "localhost", "webhooks", "ssh", "ngrok-alternative", "public-url"],
+  "documentationUrl": "https://github.com/klipitkas/tunnl.gg#using-tunnlgg",
+  "supportUrl": "https://github.com/klipitkas/tunnl.gg/issues"
+}

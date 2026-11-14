@@ -29,6 +29,7 @@ the hosted service for free, or run your own.
   - [Keep the same URL](#keep-the-same-url)
   - [Options](#options)
   - [JSON output for scripts and agents](#json-output-for-scripts-and-agents)
+  - [Claude Code plugin](#claude-code-plugin)
   - [Recipes](#recipes)
   - [Limits and protection](#limits-and-protection)
 - **Running your own server**
@@ -163,6 +164,23 @@ Lines end in `\r\n`, which JSON parsers read as whitespace. Errors in the comman
 like an unknown option, are printed as text before the session ends. The
 [guide for AI coding agents](https://tunnl.gg/guides/ai-coding-agents) has instructions to
 paste into `AGENTS.md` or `CLAUDE.md`.
+
+## Claude Code plugin
+
+The repository is also a Claude Code plugin marketplace. Its `tunnl` plugin has a skill
+that teaches Claude to start a tunnel in the background with `output=json`, read the URL,
+pick `stable@` when the URL has to survive restarts, use `host=` for dev servers that check
+the `Host` header, and stop the tunnel when it's done. Install it from a Claude Code
+session:
+
+```text
+/plugin marketplace add klipitkas/tunnl.gg
+/plugin install tunnl@tunnl-gg
+```
+
+Then ask for what you need, like "give my dev server on port 5173 a public URL" or "I need
+a webhook URL for Stripe". The skill lives in
+[`plugins/tunnl/skills/expose-localhost/SKILL.md`](plugins/tunnl/skills/expose-localhost/SKILL.md).
 
 ## Recipes
 

@@ -1,0 +1,15 @@
+{
+  "name": "tunnl-gg",
+  "description": "Plugins for tunnl.gg, public HTTPS URLs for localhost over SSH",
+  "owner": {
+    "name": "Konstantinos Lypitkas",
+    "url": "https://github.com/klipitkas"
+  },
+  "plugins": [
+    {
+      "name": "tunnl",
+      "source": "./plugins/tunnl",
+      "description": "Give a local dev server a public HTTPS URL with tunnl.gg: webhooks, OAuth callbacks, previews and phone testing, with nothing to install"
+    }
+  ]
+}
