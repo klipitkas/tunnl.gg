@@ -129,6 +129,7 @@ type Limits struct {
 	DailyTransfer     int64         // bytes each client IP, or account, may send through its tunnels per UTC day, both ways; 0 means no limit
 	TransferNote      string        // added to the notice when a client reaches DailyTransfer, e.g. how to raise it
 	SignupNote        string        // for clients without an account: what one adds and where to get it, shown in the banner and with a tunnel's first failed request; empty shows nothing
+	LimitNote         string        // shown instead of UpgradeNote when a tunnel is closed for reaching MaxLifetime, e.g. how to lift it; empty shows UpgradeNote
 }
 
 // Options clients can set in the ssh command; see tunnel.ParseOptions.

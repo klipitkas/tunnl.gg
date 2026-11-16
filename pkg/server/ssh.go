@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -208,11 +209,7 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 	// its traffic, then closes the connection
 	endSession := func(reason, note string) {
 		if logger := tun.Logger(); logger != nil {
-			msg := reason + ". " + logger.Summary() + "."
-			if note != "" {
-				msg += " " + note
-			}
-			logger.Notice(msg)
+			noticeEnd(logger, reason, note)
 			// Flush before the connection closes, but don't wait on a client
 			// that stopped reading: closing the connection unblocks the write
 			logger.CloseWithin(logFlushTimeout)
@@ -244,12 +241,12 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 					}
 				}
 				if tun.IsExpired() {
-					reason := "Tunnel closed after " + formatDuration(limits.InactivityTimeout) + " without traffic"
+					reason, note := "Tunnel closed after "+formatDuration(limits.InactivityTimeout)+" without traffic", limits.UpgradeNote
 					if hasLifetime && remaining <= 0 {
-						reason = "Tunnel closed: reached the " + formatDuration(limits.MaxLifetime) + " limit"
+						reason, note = "Tunnel closed: reached the "+formatDuration(limits.MaxLifetime)+" limit", s.lifetimeNote(sshConn, acct, limits)
 					}
 					log.Printf("Tunnel %s expired: %s", sub, reason)
-					endSession(reason, limits.UpgradeNote)
+					endSession(reason, note)
 					return
 				}
 			case <-ctx.Done():
@@ -437,6 +434,26 @@ func (s *Server) keepAlive(ctx context.Context, conn ssh.Conn, heard *heardConn)
 		default:
 		}
 	}
+}
+
+// noticeEnd tells the user why their session is ending, with a summary of
+// its traffic, and then note, if any, on a line of its own.
+func noticeEnd(logger *tunnel.RequestLogger, reason, note string) {
+	logger.Notice(reason + ". " + logger.Summary() + ".")
+	if note != "" {
+		logger.Notice(note)
+	}
+}
+
+// lifetimeNote is the note shown when conn's tunnel is closed for reaching
+// its MaxLifetime: SetLimitNote's for a stable client's key, else the
+// limits' LimitNote, else their UpgradeNote.
+func (s *Server) lifetimeNote(conn *ssh.ServerConn, acct *Account, limits config.Limits) string {
+	fallback := cmp.Or(limits.LimitNote, limits.UpgradeNote)
+	if acct != nil {
+		return fallback
+	}
+	return s.keyLimitNote(conn, fallback)
 }
 
 // lifetimeWarning is how long before the lifetime limit the user is warned.

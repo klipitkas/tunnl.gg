@@ -47,6 +47,7 @@ type Server struct {
 	accounts        AccountStore                   // nil unless the deployment has accounts
 	keyCommands     map[string]KeyCommand          // by SSH user; see SetKeyCommand
 	signupNote      func(key ssh.PublicKey) string // see SetSignupNote
+	limitNote       func(key ssh.PublicKey) string // see SetLimitNote
 	freeLimits      config.Limits                  // for anonymous clients; see SetFreeLimits
 	trafficSink     func(TrafficReport)            // see SetTrafficSink
 	trafficStop     chan struct{}

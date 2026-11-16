@@ -103,15 +103,36 @@ func (s *Server) SetSignupNote(note func(key ssh.PublicKey) string) {
 // keySignupNote is the SignupNote for conn's banner: SetSignupNote's for its
 // key, if it has one, else fallback.
 func (s *Server) keySignupNote(conn *ssh.ServerConn, fallback string) string {
-	if s.signupNote == nil || conn.Permissions == nil {
+	return keyNote(s.signupNote, conn, fallback)
+}
+
+// SetLimitNote sets what a client that connected with a key but without an
+// account sees when its tunnel is closed for reaching MaxLifetime, instead of
+// its Limits.LimitNote, e.g. a link that adds that key to a new account
+// without the limit. note returns "" to keep LimitNote. Set it before
+// serving.
+func (s *Server) SetLimitNote(note func(key ssh.PublicKey) string) {
+	s.limitNote = note
+}
+
+// keyLimitNote is the note shown when conn's tunnel reaches MaxLifetime:
+// SetLimitNote's for its key, if it has one, else fallback.
+func (s *Server) keyLimitNote(conn *ssh.ServerConn, fallback string) string {
+	return keyNote(s.limitNote, conn, fallback)
+}
+
+// keyNote is note's answer for the key a stable client authenticated with,
+// or fallback if there's no note, no key, or note returns "".
+func keyNote(note func(ssh.PublicKey) string, conn *ssh.ServerConn, fallback string) string {
+	if note == nil || conn.Permissions == nil {
 		return fallback
 	}
 	key, _ := conn.Permissions.ExtraData[stableKey{}].(ssh.PublicKey)
 	if key == nil {
 		return fallback
 	}
-	if note := s.signupNote(key); note != "" {
-		return note
+	if n := note(key); n != "" {
+		return n
 	}
 	return fallback
 }
