@@ -48,6 +48,7 @@ type Server struct {
 	keyCommands     map[string]KeyCommand          // by SSH user; see SetKeyCommand
 	signupNote      func(key ssh.PublicKey) string // see SetSignupNote
 	limitNote       func(key ssh.PublicKey) string // see SetLimitNote
+	stableGate      func(key ssh.PublicKey) string // see SetStableGate
 	freeLimits      config.Limits                  // for anonymous clients; see SetFreeLimits
 	trafficSink     func(TrafficReport)            // see SetTrafficSink
 	trafficStop     chan struct{}

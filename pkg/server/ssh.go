@@ -66,6 +66,14 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	// Check rate limits and reservations after handshake
 	acct := connAccount(sshConn)
+	if acct == nil {
+		if msg := s.stableRefusal(sshConn); msg != "" {
+			log.Printf("Stable connection refused from %s: its key didn't pass the stable gate", clientIP)
+			go ssh.DiscardRequests(reqs)
+			s.sendAndClose(sshConn, chans, msg, 1)
+			return
+		}
+	}
 	slot, err := s.CheckAndReserveConnection(clientIP, acct)
 	if err != nil {
 		log.Printf("Connection rejected from %s: %v", clientIP, err)

@@ -121,6 +121,20 @@ func (s *Server) keyLimitNote(conn *ssh.ServerConn, fallback string) string {
 	return keyNote(s.limitNote, conn, fallback)
 }
 
+// SetStableGate sets a check on clients that connect as the stable user
+// without an account. gate gets the key they authenticated with and returns
+// "" to let them in, or a message, with \r\n line endings, that they see
+// before the connection closes, e.g. when a hosted deployment gives stable
+// subdomains only to keys registered to an account. Set it before serving.
+func (s *Server) SetStableGate(gate func(key ssh.PublicKey) string) {
+	s.stableGate = gate
+}
+
+// stableRefusal is SetStableGate's message for conn, or "" to let it in.
+func (s *Server) stableRefusal(conn *ssh.ServerConn) string {
+	return keyNote(s.stableGate, conn, "")
+}
+
 // keyNote is note's answer for the key a stable client authenticated with,
 // or fallback if there's no note, no key, or note returns "".
 func keyNote(note func(ssh.PublicKey) string, conn *ssh.ServerConn, fallback string) string {
