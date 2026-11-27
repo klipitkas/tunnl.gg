@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -298,7 +299,8 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 
 	// Options come in the session's exec request, before which requests to
 	// the tunnel wait: they may restrict who gets in
-	opts, err := readOptions(requests, limits)
+	var hasPTY atomic.Bool
+	opts, err := readOptions(requests, limits, &hasPTY)
 	if err != nil {
 		msg := "\r\n  ERROR: " + err.Error() + "\r\n\r\n" + strings.ReplaceAll(tunnel.OptionsUsage, "\n", "\r\n") + "\r\n\r\n"
 		status := uint32(1)
@@ -336,6 +338,9 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		for req := range reqs {
 			switch req.Type {
 			case "pty-req", "shell", "env", "window-change":
+				if req.Type == "pty-req" {
+					hasPTY.Store(true)
+				}
 				if req.WantReply {
 					req.Reply(true, nil)
 				}
@@ -353,10 +358,18 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 		}
 	}(channel, requests)
 
-	// Read from channel to detect disconnect or Ctrl+C
-	buf := make([]byte, 1)
+	// Read from channel to detect disconnect or Ctrl+C. Each read can send
+	// the client a window adjustment, so read in large chunks: a byte at a
+	// time answers a client streaming into its input with a packet per byte.
+	buf := make([]byte, sessionReadSize)
 	for {
-		_, err := channel.Read(buf)
+		n, err := channel.Read(buf)
+		// Only a terminal sends Ctrl+C as a byte. Without one the input is
+		// piped data, where a 0x03 means nothing.
+		if hasPTY.Load() && bytes.IndexByte(buf[:n], 0x03) >= 0 {
+			endSession("Stopped", "")
+			break
+		}
 		if err != nil {
 			// ssh without a terminal, as run by a service or with
 			// < /dev/null, closes its input at once. That isn't a
@@ -366,14 +379,14 @@ func (s *Server) HandleSSHConnection(conn net.Conn) {
 			}
 			break
 		}
-		if buf[0] == 0x03 { // Ctrl+C
-			endSession("Stopped", "")
-			break
-		}
 	}
 
 	log.Printf("SSH connection closed for subdomain: %s", sub)
 }
+
+// sessionReadSize is how much of a session's input is read at once: the size
+// of the largest SSH packet, so a full one takes a single read.
+const sessionReadSize = 32 << 10
 
 // heardConn records when data last arrived from the client.
 type heardConn struct {
@@ -540,9 +553,9 @@ const commandTimeout = 5 * time.Second
 
 // readOptions reads session requests up to the client's shell or exec
 // request and returns the options in its command. It answers the requests
-// before it, like pty-req, and returns an error for invalid options and for
-// options limits don't allow.
-func readOptions(reqs <-chan *ssh.Request, limits config.Limits) (tunnel.Options, error) {
+// before it, like pty-req, which sets hasPTY, and returns an error for
+// invalid options and for options limits don't allow.
+func readOptions(reqs <-chan *ssh.Request, limits config.Limits, hasPTY *atomic.Bool) (tunnel.Options, error) {
 	timeout := time.After(commandTimeout)
 	for {
 		select {
@@ -582,6 +595,9 @@ func readOptions(reqs <-chan *ssh.Request, limits config.Limits) (tunnel.Options
 				}
 				return opts, nil
 			case "pty-req", "env", "window-change":
+				if req.Type == "pty-req" {
+					hasPTY.Store(true)
+				}
 				if req.WantReply {
 					req.Reply(true, nil)
 				}
